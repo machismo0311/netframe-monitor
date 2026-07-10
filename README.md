@@ -40,22 +40,34 @@ Beyond host health, the collector tracks the **observability stack**:
   goes `WARN` if any guest named in `MONITORING_GUESTS` (grafana, wazuh, prometheus,
   loki, homepage, pihole, uptime-kuma) is not `running`.
 - **Service health (Tier 2)** — Grafana `/api/health` probed from Jarvis over the
-  network (`WARN` if unreachable or DB not `ok`). Grafana fronts Prometheus/Loki, which
-  stay `127.0.0.1`-bound per pentest **F-03**, so they are deliberately *not* probed here
-  (would require in-CT access; that's a future Tier 3).
+  network (`WARN` if unreachable or DB not `ok`).
+- **Service-internal health (Tier 3)** — the observability stack in the grafana CT
+  and Pi-hole:
+  - **Loki** — buildinfo probed from Jarvis (network; `0.0.0.0:3100`). Stable up-signal.
+  - **Prometheus** — `127.0.0.1:9090` inside CT 103 (pentest **F-03**), so probed from
+    *inside* the CT via a fixed root-owned wrapper `/usr/local/sbin/nfm-prom-health`
+    (sudoers-pinned; the monitor cannot pass arguments). No localhost binding is relaxed.
+  - **Pi-hole** (LXC on the standalone Mac Mini `pve1`, not a cluster member) — probed by
+    its actual function: a DNS answer + admin HTTP `200`, from Jarvis. No host access needed.
 
-**Per-node sudoers** (`/etc/sudoers.d/monitor`) is scoped to the exact `list`
-subcommand — never blanket `pct`/`qm`, which could start/stop/destroy guests:
+**Per-node sudoers** (`/etc/sudoers.d/monitor`) is scoped to exact commands — never
+blanket `pct`/`qm`, which could start/stop/destroy guests:
 
 | Node | `monitor` NOPASSWD entries |
 |---|---|
-| pve3 | `journalctl`, `smartctl`, **`pct list`** |
+| pve3 | `journalctl`, `smartctl`, **`pct list`**, **`/usr/local/sbin/nfm-prom-health`** |
 | QuarkyLab | `journalctl`, `smartctl`, `zpool`, **`qm list`** |
 | randy | `journalctl`, `smartctl`, `zpool`, `proxmox-backup-manager` |
 | pve2/pve4/pve5 | `journalctl`, `smartctl` |
 
-> Not yet covered: **Pi-hole** (LXC on the standalone Mac Mini `pve1`, not a cluster
-> member) and in-CT Prometheus/Loki/Wazuh internals — see Tier 3 above.
+> **`/usr/local/sbin/nfm-prom-health`** is a fixed root-owned wrapper deployed on pve3
+> (not in this repo's deploy list above — it lives at `/usr/local/sbin/`): it runs exactly
+> `pct exec 103 -- curl -s -m 3 http://localhost:9090/-/healthy` and accepts no arguments.
+>
+> **Still not covered — Wazuh internals:** the SIEM (VM 104 on QuarkyLab) has no
+> qemu-guest-agent and no monitor SSH access, so its manager health can't be reached
+> without provisioning access into the VM. Tier 1 `qm list` confirms the VM is *running*;
+> internal `wazuh-control status` is deferred pending an access decision.
 
 ## Deploy / update
 

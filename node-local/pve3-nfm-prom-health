@@ -1,0 +1,5 @@
+#!/bin/sh
+# NetFRAME monitor: read-only Prometheus health probe inside grafana CT 103.
+# Prometheus is 127.0.0.1-bound (pentest F-03), so it can only be reached from
+# inside the CT. Fixed command; accepts NO arguments.
+exec /usr/sbin/pct exec 103 -- /bin/curl -s -m 3 http://localhost:9090/-/healthy

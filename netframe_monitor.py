@@ -68,16 +68,29 @@ GRAFANA = "/usr/bin/curl -fsS -m 5 http://192.168.10.183:3000/api/health"
 MONITORING_GUESTS = {"grafana", "wazuh", "prometheus", "loki",
                      "homepage", "pihole", "pi-hole", "uptime-kuma"}
 
+# --- Tier 3: service-internal / in-stack health -----------------------------
+# Prometheus is 127.0.0.1-bound inside the grafana CT (pentest F-03), so it is
+# probed from *inside* CT 103 via a fixed, root-owned, sudoers-pinned wrapper
+# (/usr/local/sbin/nfm-prom-health) — the monitor cannot pass it any arguments.
+PROMETHEUS = "sudo -n /usr/local/sbin/nfm-prom-health"
+# Loki is network-reachable; buildinfo is a stable up-signal (avoids /ready 503 flap).
+LOKI = "/usr/bin/curl -fsS -m 5 http://192.168.10.183:3100/loki/api/v1/status/buildinfo"
+# Pi-hole (LXC on the standalone Mac Mini pve1, not a cluster member): probed by its
+# actual function — a DNS answer + admin HTTP — from Jarvis, no host access needed.
+PIHOLE = ("echo DNS:; dig +short +time=3 +tries=1 @192.168.10.177 example.com A; "
+          "echo HTTP:; /usr/bin/curl -s -o /dev/null -w '%{http_code}' -m 5 "
+          "http://192.168.10.177/admin/")
+
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
     "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
-    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST}},
+    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS}},
     "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
-    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA}},
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE}},
 }
 
 SSH_OPTS = [
@@ -220,9 +233,37 @@ def parse_grafana(out):
             "up": bool(db) and db.group(1) == "ok"}
 
 
+def parse_prometheus(out):
+    return {"up": "healthy" in out.lower()}
+
+
+def parse_loki(out):
+    ver = re.search(r'"version"\s*:\s*"([^"]+)"', out)
+    return {"up": bool(ver), "version": ver.group(1) if ver else None}
+
+
+def parse_pihole(out):
+    dns_ip, http_code, section = None, None, None
+    for line in out.splitlines():
+        s = line.strip()
+        if s == "DNS:":
+            section = "dns"; continue
+        if s == "HTTP:":
+            section = "http"; continue
+        if section == "dns" and re.match(r"\d+\.\d+\.\d+\.\d+$", s):
+            dns_ip = dns_ip or s
+        elif section == "http":
+            m = re.search(r"\d{3}", s)
+            if m:
+                http_code = int(m.group(0))
+    return {"dns_up": dns_ip is not None, "dns_answer": dns_ip,
+            "http_code": http_code, "up": dns_ip is not None}
+
+
 PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
-           "guests": parse_guests, "grafana": parse_grafana}
+           "guests": parse_guests, "grafana": parse_grafana,
+           "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole}
 
 
 def classify(name, rc, out):
@@ -249,6 +290,16 @@ def classify(name, rc, out):
         if rc != 0:
             return "WARN"  # endpoint unreachable / HTTP error
         return "OK" if re.search(r'"database"\s*:\s*"ok"', out) else "WARN"
+    if name == "prometheus":
+        return "OK" if "healthy" in low else "WARN"
+    if name == "loki":
+        return "OK" if rc == 0 and '"version"' in out else "WARN"
+    if name == "pihole":
+        # OK when Pi-hole answers DNS (its core function).
+        for line in out.splitlines():
+            if re.match(r"\s*\d+\.\d+\.\d+\.\d+$", line.strip()):
+                return "OK"
+        return "WARN"
     if name == "smart":
         if "self-assessment test result: failed" in low or "failing_now" in low or "smart health status: fail" in low:
             return "WARN"
@@ -281,8 +332,8 @@ def flatten_metrics(nodes):
             if name == "guests":
                 flat[f"{host}.guests.running"] = m.get("running")
                 flat[f"{host}.guests.stopped"] = m.get("stopped")
-            if name == "grafana":
-                flat[f"{host}.grafana.up"] = 1 if m.get("up") else 0
+            if name in ("grafana", "prometheus", "loki", "pihole"):
+                flat[f"{host}.{name}.up"] = 1 if m.get("up") else 0
     return flat
 
 
