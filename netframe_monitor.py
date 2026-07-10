@@ -80,6 +80,13 @@ LOKI = "/usr/bin/curl -fsS -m 5 http://192.168.10.183:3100/loki/api/v1/status/bu
 PIHOLE = ("echo DNS:; dig +short +time=3 +tries=1 @192.168.10.177 example.com A; "
           "echo HTTP:; /usr/bin/curl -s -o /dev/null -w '%{http_code}' -m 5 "
           "http://192.168.10.177/admin/")
+# Wazuh manager (SIEM, VM 104 on QuarkyLab, its own IP .184) — monitor SSHes in like
+# any node; sudoers there is scoped to exactly `wazuh-control status`. Only the CORE
+# daemons matter: clusterd/maild/agentlessd/integratord/dbd/csyslogd are disabled by
+# default and legitimately show "not running", so we never alert on those.
+WAZUH = "sudo -n /var/ossec/bin/wazuh-control status"
+WAZUH_CORE = {"wazuh-analysisd", "wazuh-remoted", "wazuh-db",
+              "wazuh-modulesd", "wazuh-syscheckd"}
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
@@ -89,6 +96,8 @@ NODES = {
     "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS}},
     "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
+    # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
+    "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
     "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE}},
 }
@@ -260,10 +269,23 @@ def parse_pihole(out):
             "http_code": http_code, "up": dns_ip is not None}
 
 
+def parse_wazuh(out):
+    status = {}
+    for line in out.splitlines():
+        m = re.match(r"\s*(wazuh-[\w-]+)\s+(is running|not running)", line)
+        if m:
+            status[m.group(1)] = (m.group(2) == "is running")
+    core_down = sorted(d for d in WAZUH_CORE if status.get(d) is not True)
+    return {"running": sum(1 for v in status.values() if v), "total": len(status),
+            "down": sorted(d for d, v in status.items() if not v),
+            "core_down": core_down, "up": not core_down}
+
+
 PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
            "guests": parse_guests, "grafana": parse_grafana,
-           "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole}
+           "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
+           "wazuh": parse_wazuh}
 
 
 def classify(name, rc, out):
@@ -300,6 +322,17 @@ def classify(name, rc, out):
             if re.match(r"\s*\d+\.\d+\.\d+\.\d+$", line.strip()):
                 return "OK"
         return "WARN"
+    if name == "wazuh":
+        # `wazuh-control status` exits non-zero if ANY daemon (incl. optional ones
+        # that are down by design) isn't running, so rc is not a health signal.
+        # Judge only by the CORE daemons; auth/ssh failures are caught above.
+        daemons = re.findall(r"(wazuh-[\w-]+)\s+(?:is running|not running)", out)
+        if not daemons:
+            return "WARN"  # no daemon status at all -> command didn't really run
+        for m in re.finditer(r"(wazuh-[\w-]+)\s+not running", out):
+            if m.group(1) in WAZUH_CORE:
+                return "WARN"
+        return "OK"
     if name == "smart":
         if "self-assessment test result: failed" in low or "failing_now" in low or "smart health status: fail" in low:
             return "WARN"
@@ -334,6 +367,9 @@ def flatten_metrics(nodes):
                 flat[f"{host}.guests.stopped"] = m.get("stopped")
             if name in ("grafana", "prometheus", "loki", "pihole"):
                 flat[f"{host}.{name}.up"] = 1 if m.get("up") else 0
+            if name == "wazuh":
+                flat[f"{host}.wazuh.up"] = 1 if m.get("up") else 0
+                flat[f"{host}.wazuh.running"] = m.get("running")
     return flat
 
 
