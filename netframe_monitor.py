@@ -53,15 +53,31 @@ GPU = (
     "/usr/bin/nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,"
     "memory.used,memory.total --format=csv,noheader,nounits"
 )
+# Guest (CT/VM) liveness, read-only. Scoped in sudoers to the `list` subcommand
+# only — NOT blanket pct/qm (which could start/stop/destroy). pct on pve3 (LXCs:
+# grafana/homepage/etc.), qm on QuarkyLab (wazuh VM).
+PCT_LIST = "sudo -n /usr/sbin/pct list"
+QM_LIST = "sudo -n /usr/sbin/qm list"
+# Monitoring-service health, probed from Jarvis over the network. Grafana's
+# /api/health is unauthenticated and reports its DB status. Grafana fronts
+# Prometheus/Loki, which stay localhost-bound (pentest F-03) and so are only
+# reachable from inside their CT — deliberately out of scope here.
+GRAFANA = "/usr/bin/curl -fsS -m 5 http://192.168.10.183:3000/api/health"
+
+# Guests whose being down is worth an alert (the observability/monitoring stack).
+MONITORING_GUESTS = {"grafana", "wazuh", "prometheus", "loki",
+                     "homepage", "pihole", "pi-hole", "uptime-kuma"}
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
     "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS}},
-    "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU}},
+    "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
-    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
+    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST}},
     "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
+    # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA}},
 }
 
 SSH_OPTS = [
@@ -167,8 +183,46 @@ def parse_pbs(out):
     return {"lines": len([l for l in out.splitlines() if l.strip()])}
 
 
+def _guest_rows(out):
+    """Normalize `pct list` / `qm list` output to (vmid, name, status) rows.
+
+    pct list:  VMID Status [Lock] Name
+    qm list:   VMID NAME STATUS MEM(MB) BOOTDISK(GB) PID
+    """
+    rows = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        if parts[1].lower() in ("running", "stopped", "paused", "suspended"):
+            status, name = parts[1].lower(), parts[-1]  # pct: status is col 2
+        else:
+            status, name = parts[2].lower(), parts[1]    # qm: name col 2, status col 3
+        rows.append((parts[0], name, status))
+    return rows
+
+
+def parse_guests(out):
+    rows = _guest_rows(out)
+    guests = {name: status for _, name, status in rows}
+    running = sum(1 for _, _, s in rows if s == "running")
+    down_monitoring = sorted(n for n, s in guests.items()
+                             if s != "running" and n.lower() in MONITORING_GUESTS)
+    return {"total": len(rows), "running": running, "stopped": len(rows) - running,
+            "guests": guests, "down_monitoring": down_monitoring}
+
+
+def parse_grafana(out):
+    db = re.search(r'"database"\s*:\s*"([^"]+)"', out)
+    ver = re.search(r'"version"\s*:\s*"([^"]+)"', out)
+    return {"database": db.group(1) if db else None,
+            "version": ver.group(1) if ver else None,
+            "up": bool(db) and db.group(1) == "ok"}
+
+
 PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
-           "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs}
+           "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
+           "guests": parse_guests, "grafana": parse_grafana}
 
 
 def classify(name, rc, out):
@@ -184,6 +238,17 @@ def classify(name, rc, out):
             return "AUTH-FAIL"
     if "permission denied (publickey" in low or "host key verification failed" in low:
         return "AUTH-FAIL"
+    if name == "guests":
+        if rc != 0:
+            return "WARN"
+        for _, gname, status in _guest_rows(out):
+            if gname.lower() in MONITORING_GUESTS and status != "running":
+                return "WARN"  # a monitoring guest is down
+        return "OK"
+    if name == "grafana":
+        if rc != 0:
+            return "WARN"  # endpoint unreachable / HTTP error
+        return "OK" if re.search(r'"database"\s*:\s*"ok"', out) else "WARN"
     if name == "smart":
         if "self-assessment test result: failed" in low or "failing_now" in low or "smart health status: fail" in low:
             return "WARN"
@@ -213,6 +278,11 @@ def flatten_metrics(nodes):
                 flat[f"{host}.smart.worst_realloc"] = m.get("worst_reallocated", 0)
                 if m.get("max_temp_c") is not None:
                     flat[f"{host}.smart.max_temp_c"] = m["max_temp_c"]
+            if name == "guests":
+                flat[f"{host}.guests.running"] = m.get("running")
+                flat[f"{host}.guests.stopped"] = m.get("stopped")
+            if name == "grafana":
+                flat[f"{host}.grafana.up"] = 1 if m.get("up") else 0
     return flat
 
 
