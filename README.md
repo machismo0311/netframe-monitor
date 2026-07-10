@@ -49,6 +49,14 @@ Beyond host health, the collector tracks the **observability stack**:
     (sudoers-pinned; the monitor cannot pass arguments). No localhost binding is relaxed.
   - **Pi-hole** (LXC on the standalone Mac Mini `pve1`, not a cluster member) — probed by
     its actual function: a DNS answer + admin HTTP `200`, from Jarvis. No host access needed.
+  - **Wazuh** (SIEM, VM 104 on QuarkyLab, own IP `192.168.10.184`) — `wazuh-control status`
+    over SSH as the `monitor` user (scoped sudo). Verdict keys off the **core** daemons
+    (analysisd, remoted, db, modulesd, syscheckd); optional daemons (clusterd, maild,
+    agentlessd, integratord, dbd, csyslogd) are down by design, and `wazuh-control` exits
+    non-zero regardless, so **rc is ignored**. Plus unprivileged `df` for SIEM disk.
+- **Self-guard** — `page_auth` curls `https://health.kylemason.org` from Jarvis with no
+  credentials: **`401` = auth enforced (OK)**, **`200` = the NPM access list got detached
+  and the page is public (WARN)**. Catches the recurring reset described under *Access*.
 
 **Per-node sudoers** (`/etc/sudoers.d/monitor`) is scoped to exact commands — never
 blanket `pct`/`qm`, which could start/stop/destroy guests:
@@ -58,16 +66,17 @@ blanket `pct`/`qm`, which could start/stop/destroy guests:
 | pve3 | `journalctl`, `smartctl`, **`pct list`**, **`/usr/local/sbin/nfm-prom-health`** |
 | QuarkyLab | `journalctl`, `smartctl`, `zpool`, **`qm list`** |
 | randy | `journalctl`, `smartctl`, `zpool`, `proxmox-backup-manager` |
+| **wazuh VM (.184)** | **`/var/ossec/bin/wazuh-control status`** (df runs unprivileged) |
 | pve2/pve4/pve5 | `journalctl`, `smartctl` |
 
 > **`/usr/local/sbin/nfm-prom-health`** is a fixed root-owned wrapper deployed on pve3
 > (not in this repo's deploy list above — it lives at `/usr/local/sbin/`): it runs exactly
 > `pct exec 103 -- curl -s -m 3 http://localhost:9090/-/healthy` and accepts no arguments.
 >
-> **Still not covered — Wazuh internals:** the SIEM (VM 104 on QuarkyLab) has no
-> qemu-guest-agent and no monitor SSH access, so its manager health can't be reached
-> without provisioning access into the VM. Tier 1 `qm list` confirms the VM is *running*;
-> internal `wazuh-control status` is deferred pending an access decision.
+> **NPM access-list resets:** editing the `health.kylemason.org` proxy host and saving
+> without re-selecting **Access List = "Homepage Auth"** and **Force SSL** silently reverts
+> it to *Publicly Accessible*. The `page_auth` guard exists to catch this; re-attach both in
+> the NPM UI when it WARNs.
 
 ## Deploy / update
 
