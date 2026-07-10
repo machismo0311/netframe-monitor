@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# pre-push: run the same checks as CI locally before allowing a push.
+# Install: ./install-hooks.sh    Bypass (use sparingly): git push --no-verify
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)"
+fail=0
+if command -v ruff >/dev/null; then
+  echo "→ ruff (critical bug rules)"; ruff check --select E9,F63,F7,F82 . || fail=1
+else echo "· skip ruff (install: pip install ruff)"; fi
+echo "→ py_compile"
+find . -name '*.py' -not -path './.git/*' -print0 | xargs -0 -r python3 -m py_compile || fail=1
+if command -v shellcheck >/dev/null; then
+  echo "→ shellcheck"; find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r shellcheck --severity=error || fail=1
+else echo "· skip shellcheck (install shellcheck)"; fi
+if [ $fail -ne 0 ]; then echo "✗ pre-push checks FAILED — fix, or bypass with: git push --no-verify"; exit 1; fi
+echo "✓ pre-push checks passed"
