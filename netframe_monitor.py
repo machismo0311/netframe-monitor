@@ -87,6 +87,12 @@ PIHOLE = ("echo DNS:; dig +short +time=3 +tries=1 @192.168.10.177 example.com A;
 WAZUH = "sudo -n /var/ossec/bin/wazuh-control status"
 WAZUH_CORE = {"wazuh-analysisd", "wazuh-remoted", "wazuh-db",
               "wazuh-modulesd", "wazuh-syscheckd"}
+# Self-guard: the report page must stay behind NPM Basic auth. An un-credentialed
+# request should get 401; a 200 means the NPM access list got detached (the page is
+# publicly readable) — WARN so we notice instead of it silently regressing.
+AUTHGUARD = ("echo -n 'health.kylemason.org (auth-gated) HTTP '; "
+             "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
+             "https://health.kylemason.org")
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
@@ -99,7 +105,7 @@ NODES = {
     # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
     "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
-    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE}},
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD}},
 }
 
 SSH_OPTS = [
@@ -269,6 +275,12 @@ def parse_pihole(out):
             "http_code": http_code, "up": dns_ip is not None}
 
 
+def parse_page_auth(out):
+    m = re.search(r"HTTP\s+(\d{3})", out)
+    code = int(m.group(1)) if m else None
+    return {"http_code": code, "auth_enforced": code == 401}
+
+
 def parse_wazuh(out):
     status = {}
     for line in out.splitlines():
@@ -285,7 +297,7 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
            "guests": parse_guests, "grafana": parse_grafana,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
-           "wazuh": parse_wazuh}
+           "wazuh": parse_wazuh, "page_auth": parse_page_auth}
 
 
 def classify(name, rc, out):
@@ -322,6 +334,10 @@ def classify(name, rc, out):
             if re.match(r"\s*\d+\.\d+\.\d+\.\d+$", line.strip()):
                 return "OK"
         return "WARN"
+    if name == "page_auth":
+        # 401 = NPM auth enforced (healthy). 200 = access list detached (public!).
+        m = re.search(r"HTTP\s+(\d{3})", out)
+        return "OK" if (m and m.group(1) == "401") else "WARN"
     if name == "wazuh":
         # `wazuh-control status` exits non-zero if ANY daemon (incl. optional ones
         # that are down by design) isn't running, so rc is not a health signal.
@@ -370,6 +386,8 @@ def flatten_metrics(nodes):
             if name == "wazuh":
                 flat[f"{host}.wazuh.up"] = 1 if m.get("up") else 0
                 flat[f"{host}.wazuh.running"] = m.get("running")
+            if name == "page_auth":
+                flat[f"{host}.page_auth.enforced"] = 1 if m.get("auth_enforced") else 0
     return flat
 
 
