@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict NetFRAME report port 8808 to NPM + localhost
+After=network-online.target netframe-report-web.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/netframe-monitor/netframe-8808-lock.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

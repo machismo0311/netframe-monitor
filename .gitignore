@@ -1,0 +1,15 @@
+# Secrets — NEVER commit the monitor SSH keypair
+monitor_key
+monitor_key.pub
+
+# Runtime state and rendered output (regenerated on Jarvis)
+last_run.json
+history.jsonl
+report.md
+reports/
+web/
+__pycache__/
+*.pyc
+
+# Standing context is a copy of the (already-tracked) vault pentest doc
+context/

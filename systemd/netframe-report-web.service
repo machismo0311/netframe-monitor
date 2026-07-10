@@ -1,0 +1,20 @@
+[Unit]
+Description=NetFRAME health report — static web page (report.html)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+# Serves ONLY /opt/netframe-monitor/web — never the parent dir (which holds monitor_key).
+ExecStart=/usr/bin/python3 -m http.server 8808 --directory /opt/netframe-monitor/web --bind 0.0.0.0
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

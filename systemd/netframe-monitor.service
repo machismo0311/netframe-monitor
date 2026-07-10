@@ -1,0 +1,13 @@
+[Unit]
+Description=NetFRAME cluster health monitor (read-only diagnostics sweep + LLM interpretation)
+Documentation=file:/opt/netframe-monitor/netframe_monitor.py
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Nice=10
+ExecStart=/opt/netframe-monitor/netframe-run.sh
+TimeoutStartSec=600
