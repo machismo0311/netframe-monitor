@@ -49,6 +49,12 @@ SMART = (
 )
 ZPOOL = "sudo -n /usr/sbin/zpool status -x; echo '---'; sudo -n /usr/sbin/zpool list"
 PBS = "sudo -n /usr/sbin/proxmox-backup-manager datastore list"
+# Backup-verify report emitted by the Ansible backup-verify playbook (daily cron
+# on Ares, written world-readable on Randy). Unprivileged cat — freshness is
+# judged from the report's own `generated_epoch`, so a dead cron/timer surfaces
+# as a stale report (WARN) instead of silently going unnoticed.
+BACKUP_VERIFY = "cat /var/log/netframe-monitor/backup-report.json 2>/dev/null"
+BACKUP_VERIFY_MAX_AGE_H = 26  # written ~06:00 daily; older => stale
 GPU = (
     "/usr/bin/nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,"
     "memory.used,memory.total --format=csv,noheader,nounits"
@@ -96,7 +102,7 @@ AUTHGUARD = ("echo -n 'health.kylemason.org (auth-gated) HTTP '; "
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
-    "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS}},
+    "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS}},
@@ -256,6 +262,39 @@ def parse_pbs(out):
     return {"lines": len([l for l in out.splitlines() if l.strip()])}
 
 
+def _backup_verify_load(out):
+    """Parse the backup-verify report JSON; None if absent/unreadable/not JSON."""
+    if not out or not out.strip():
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def _backup_verify_age_h(data):
+    """Report age in hours from its own generated_epoch; None if unusable."""
+    gen = data.get("generated_epoch")
+    if not isinstance(gen, (int, float)):
+        return None
+    return round((datetime.now(timezone.utc).timestamp() - gen) / 3600, 1)
+
+
+def parse_backup_verify(out):
+    data = _backup_verify_load(out)
+    if data is None:
+        return {"present": False}
+    checks = {c.get("name"): c.get("status") for c in data.get("checks", [])}
+    age_h = _backup_verify_age_h(data)
+    return {"present": True,
+            "overall": data.get("overall"),
+            "checks": checks,
+            "failed": sorted(n for n, s in checks.items() if s != "pass"),
+            "generated": data.get("generated"),
+            "age_hours": age_h,
+            "stale": age_h is None or age_h > BACKUP_VERIFY_MAX_AGE_H}
+
+
 def _guest_rows(out):
     """Normalize `pct list` / `qm list` output to (vmid, name, status) rows.
 
@@ -340,6 +379,7 @@ def parse_wazuh(out):
 
 PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
+           "backup_verify": parse_backup_verify,
            "guests": parse_guests, "grafana": parse_grafana,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
            "wazuh": parse_wazuh, "page_auth": parse_page_auth}
@@ -394,6 +434,14 @@ def classify(name, rc, out):
             if m.group(1) in WAZUH_CORE:
                 return "WARN"
         return "OK"
+    if name == "backup_verify":
+        data = _backup_verify_load(out)
+        if data is None:
+            return "WARN"  # report missing / unreadable / not JSON
+        age_h = _backup_verify_age_h(data)
+        if age_h is None or age_h > BACKUP_VERIFY_MAX_AGE_H:
+            return "WARN"  # stale report => dead cron/timer on Ares
+        return "OK" if data.get("overall") == "pass" else "WARN"
     if name == "smart":
         if "self-assessment test result: failed" in low or "failing_now" in low or "smart health status: fail" in low:
             return "WARN"
@@ -433,6 +481,11 @@ def flatten_metrics(nodes):
                 flat[f"{host}.wazuh.running"] = m.get("running")
             if name == "page_auth":
                 flat[f"{host}.page_auth.enforced"] = 1 if m.get("auth_enforced") else 0
+            if name == "backup_verify":
+                ok = m.get("present") and m.get("overall") == "pass" and not m.get("stale")
+                flat[f"{host}.backup_verify.ok"] = 1 if ok else 0
+                if m.get("age_hours") is not None:
+                    flat[f"{host}.backup_verify.age_hours"] = m["age_hours"]
     return flat
 
 
