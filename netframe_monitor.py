@@ -198,10 +198,55 @@ def parse_smart(out):
             "max_temp_c": max_temp}
 
 
+# Kernel/journal lines that are cosmetic on this hardware — benign firmware,
+# driver, and read-only-mount chatter that journalctl records at err priority
+# but that needs no action. Filtered so they neither inflate error_lines nor
+# reach the LLM interpreter (which had been narrating them as "kernel/service
+# initialization errors"). Each pattern is kept tight so a genuinely new fault
+# still surfaces. NB: NIC "Link is Down" is deliberately NOT filtered — that is
+# real link state, not cosmetic.
+BENIGN_JOURNAL_RE = re.compile(
+    r"""(?ix)
+    # --- kernel / firmware / driver chatter ---
+      ACPI\ (Error|BIOS\ Error).*(IPMI|PMI0\._(GHL|PMC)|_OSC|AE_AML_BUFFER_LIMIT)  # Dell/SM ACPI-IPMI + _OSC buffer quirk
+    | Region\ IPMI\ .*has\ no\ handler
+    | SGX\ disabled\ or\ unsupported\ by\ BIOS
+    | EXT4-fs\ .*write\ access\ unavailable,\ skipping\ orphan\ cleanup             # read-only snapshot mount during PBS backup
+    | bnx2x\ .*Unqualified\ SFP\+\ module                                           # 10G DAC not on Broadcom whitelist
+    | mpt2sas.*overriding\ NVDATA\ EEDPTagMode                                      # LSI/AVAGO HBA init info line
+    | kernel:\s*$                                                                    # empty kernel message
+    # --- always-present service / boot-ordering chatter (not real faults) ---
+    | blkmapd.*open\ pipe\ file.*blocklayout\ failed                                # NFS pNFS block-layout pipe, cosmetic
+    | pmxcfs.*\[(quorum|confdb|dcdb|status)\].*(_initialize\ failed:\ CS_ERR_LIBRARY|can't\ initialize\ service)  # boot race: pmxcfs starts before corosync, retries & connects
+    | smartd.*no\ ATA\ CHECK\ POWER\ STATUS\ support                                # smartd -n directive notice, per-disk
+    | proxmox-backup.*could\ not\ notify.*no\ recipients\ provided                  # PBS mail target unset (notification misconfig, not a health fault)
+    | proxmox-backup-proxy.*HEAD\ /:\ 400\ Bad\ Request.*invalid\ http\ method      # external HEAD / probe
+    | VM\ 100\ qga\ command.*guest-ping.*got\ timeout                               # OPNsense VM 100: agent=1 but FreeBSD appliance runs no qemu-ga; VM is healthy. Scoped to 100 so real agent timeouts (e.g. Wazuh VM 104) still surface.
+    | pveproxy.*got\ inotify\ poll\ request\ in\ wrong\ process                     # benign PVE worker-fork message
+    """,
+)
+
+
+def _split_journal(out):
+    """Partition non-empty journal lines into (actionable, benign-filtered)."""
+    actionable, benign = [], []
+    for l in out.splitlines():
+        if not l.strip():
+            continue
+        (benign if BENIGN_JOURNAL_RE.search(l) else actionable).append(l)
+    return actionable, benign
+
+
+def filter_benign_journal(out):
+    """Raw journal text with known-cosmetic lines removed (for the LLM excerpt)."""
+    return "\n".join(_split_journal(out)[0])
+
+
 def parse_journal(out):
-    lines = [l for l in out.splitlines() if l.strip()]
-    low = out.lower()
-    return {"error_lines": len(lines),
+    actionable, benign = _split_journal(out)
+    low = "\n".join(actionable).lower()
+    return {"error_lines": len(actionable),
+            "benign_filtered": len(benign),
             "auth_failures": low.count("authentication failure") + low.count("failed password"),
             "service_failures": low.count("failed to start")}
 
@@ -425,8 +470,11 @@ def main():
                 metrics = PARSERS[name](out) if name in PARSERS else {}
             except Exception as exc:  # noqa: BLE001
                 metrics = {"parse_error": str(exc)}
+            # Strip cosmetic kernel chatter from the journal excerpt the
+            # interpreter reads, so genuine errors aren't buried in noise.
+            excerpt = filter_benign_journal(out) if name == "journal_errors" else out
             node_result[name] = {"verdict": verdict, "rc": rc, "metrics": metrics,
-                                 "raw_excerpt": out[:RAW_EXCERPT]}
+                                 "raw_excerpt": excerpt[:RAW_EXCERPT]}
             print(f"\n--- [{verdict}] {host}:{name} (rc={rc}) ---")
             print(out if out else "<no output>")
         report["nodes"][host] = node_result
