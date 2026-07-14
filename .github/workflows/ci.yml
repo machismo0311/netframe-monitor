@@ -17,8 +17,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install ruff
-      - name: Ruff (critical bug rules)
-        run: ruff check --select E9,F63,F7,F82 .
+      - name: Ruff (full check)
+        run: ruff check .
       - name: Syntax check (py_compile)
         run: find . -name '*.py' -not -path './.git/*' -print0 | xargs -0 python -m py_compile
 

@@ -236,10 +236,10 @@ BENIGN_JOURNAL_RE = re.compile(
 def _split_journal(out):
     """Partition non-empty journal lines into (actionable, benign-filtered)."""
     actionable, benign = [], []
-    for l in out.splitlines():
-        if not l.strip():
+    for line in out.splitlines():
+        if not line.strip():
             continue
-        (benign if BENIGN_JOURNAL_RE.search(l) else actionable).append(l)
+        (benign if BENIGN_JOURNAL_RE.search(line) else actionable).append(line)
     return actionable, benign
 
 
@@ -258,8 +258,7 @@ def parse_journal(out):
 
 
 def parse_pbs(out):
-    stores = [l for l in out.splitlines() if l and not l.startswith(("┌", "├", "└", "│ Name", "╞"))]
-    return {"lines": len([l for l in out.splitlines() if l.strip()])}
+    return {"lines": len([line for line in out.splitlines() if line.strip()])}
 
 
 def _backup_verify_load(out):
@@ -346,9 +345,11 @@ def parse_pihole(out):
     for line in out.splitlines():
         s = line.strip()
         if s == "DNS:":
-            section = "dns"; continue
+            section = "dns"
+            continue
         if s == "HTTP:":
-            section = "http"; continue
+            section = "http"
+            continue
         if section == "dns" and re.match(r"\d+\.\d+\.\d+\.\d+$", s):
             dns_ip = dns_ip or s
         elif section == "http":

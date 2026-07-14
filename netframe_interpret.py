@@ -231,7 +231,8 @@ def markdown_to_html(md):
     out, in_ul = [], False
     for line in md.splitlines():
         if in_ul and not line.lstrip().startswith("- "):
-            out.append("</ul>"); in_ul = False
+            out.append("</ul>")
+            in_ul = False
         s = line.strip()
         if s == "---":
             out.append("<hr>")
@@ -241,7 +242,8 @@ def markdown_to_html(md):
             out.append(f"<h1>{_md_inline(s[2:])}</h1>")
         elif s.startswith("- "):
             if not in_ul:
-                out.append("<ul>"); in_ul = True
+                out.append("<ul>")
+                in_ul = True
             out.append(f"<li>{_md_inline(s[2:])}</li>")
         elif s.startswith("_") and s.endswith("_") and len(s) > 1:
             out.append(f'<p class="muted">{_md_inline(s.strip("_"))}</p>')
