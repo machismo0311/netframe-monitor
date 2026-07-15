@@ -36,6 +36,11 @@ CHECK_ALIASES = {
     "monitoring.grafana": "monitoring_ct103",
     "monitoring.loki": "monitoring_ct103",
     "monitoring.pihole": "pihole_primary",
+    # Conformance runs on the jarvis host but is ABOUT llm_router, so a failure must
+    # attribute to the router (and its blast radius: open_webui, ops_console), not to
+    # "jarvis the node is unhealthy". The three dimensions all fold to the router here;
+    # the per-dimension detail in the metrics is what says config vs runtime vs firewall.
+    "jarvis.llm_router_conformance": "llm_router",
 }
 
 
