@@ -1,0 +1,15 @@
+[Unit]
+Description=Debounced restart of the ops console after a source change
+Documentation=file:/opt/netframe-monitor/README.md
+# Do not fight a manual/administrative stop of the console.
+After=netframe-console.service
+
+[Service]
+Type=oneshot
+# Settle window: a multi-file deploy (scp of several modules) fires PathModified several
+# times in a second or two. The sleep lets the whole set land before the restart, so the
+# console comes back up ONCE with a consistent copy rather than mid-deploy.
+ExecStartPre=/bin/sleep 3
+# Only restart if the console is actually supposed to be running (enabled/active), so this
+# never resurrects a console an operator deliberately stopped.
+ExecStart=/bin/sh -c 'systemctl is-active --quiet netframe-console.service && systemctl restart netframe-console.service || true'
