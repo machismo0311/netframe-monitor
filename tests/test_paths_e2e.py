@@ -216,3 +216,42 @@ def test_interpreter_appends_deterministic_evidence_section():
         os.environ.pop("NETFRAME_BASE", None)
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---- NF-AIOPS-005 rollout: evidence section on every report path ----
+
+def _run_evidence(mod, stub_attr, out_name):
+    """Drive a report path's real main() with a material finding in telemetry and a
+    stubbed model; assert the SHARED evidence section lands in the artifact and the
+    finding was annotated, not suppressed."""
+    tmp = _sandbox()
+    try:
+        os.environ["NETFRAME_BASE"] = tmp
+        os.environ["NETFRAME_LOKI_PUSH"] = "http://127.0.0.1:1/disabled"
+        _fresh_modules()
+        sys.modules.pop("netframe_evidence", None)
+        state = json.load(open(f"{tmp}/last_run.json"))
+        state["worst"] = "WARN"
+        state["nodes"]["jarvis"] = {"llm_router_conformance": {
+            "verdict": "WARN",
+            "metrics": {"config": "PASS", "runtime": "FAIL", "firewall": "PASS"},
+            "raw_excerpt": ""}}
+        json.dump(state, open(f"{tmp}/last_run.json", "w"))
+        m = _load(mod, tmp)
+        setattr(m, stub_attr, lambda *a, **k: "## Summary\nModel prose about the day.\n")
+        m.main()
+        report = open(f"{tmp}/{out_name}").read()
+        assert "Evidence & confidence (deterministic" in report, \
+            f"{mod}: shared evidence section missing"
+        assert "jarvis.llm_router_conformance" in report
+        assert "runtime_bind_mismatch" in report  # deterministic condition, from code
+        # annotation only: the model's own prose must survive alongside
+        assert "Model prose about the day." in report
+    finally:
+        os.environ.pop("NETFRAME_BASE", None)
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_daily_carries_shared_evidence_section():
+    _run_evidence("netframe_daily", "call_llm", "report-daily.md")
