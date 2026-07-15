@@ -110,6 +110,12 @@ WAZUH_CORE = {"wazuh-analysisd", "wazuh-remoted", "wazuh-db",
 AUTHGUARD = ("echo -n 'health.kylemason.org (auth-gated) HTTP '; "
              "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
              "https://health.kylemason.org")
+# Same self-guard for the operations console. It is a SEPARATE NPM proxy host, so
+# its access list can detach independently of health's — and a public console is
+# worse than a public report page, since it exposes the chat interface.
+CONSOLE_AUTHGUARD = ("echo -n 'console.kylemason.org (auth-gated) HTTP '; "
+                     "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
+                     "https://console.kylemason.org")
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
@@ -122,7 +128,7 @@ NODES = {
     # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
     "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
-    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
 }
 
 SSH_OPTS = [
@@ -404,6 +410,7 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "guests": parse_guests, "grafana": parse_grafana,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
            "wazuh": parse_wazuh, "page_auth": parse_page_auth,
+           "console_auth": parse_page_auth,
            "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog}
 
 
@@ -451,7 +458,7 @@ def classify(name, rc, out):
             if re.match(r"\s*\d+\.\d+\.\d+\.\d+$", line.strip()):
                 return "OK"
         return "WARN"
-    if name == "page_auth":
+    if name in ("page_auth", "console_auth"):
         # 401 = NPM auth enforced (healthy). 200 = access list detached (public!).
         m = re.search(r"HTTP\s+(\d{3})", out)
         return "OK" if (m and m.group(1) == "401") else "WARN"
@@ -511,8 +518,8 @@ def flatten_metrics(nodes):
             if name == "wazuh":
                 flat[f"{host}.wazuh.up"] = 1 if m.get("up") else 0
                 flat[f"{host}.wazuh.running"] = m.get("running")
-            if name == "page_auth":
-                flat[f"{host}.page_auth.enforced"] = 1 if m.get("auth_enforced") else 0
+            if name in ("page_auth", "console_auth"):
+                flat[f"{host}.{name}.enforced"] = 1 if m.get("auth_enforced") else 0
             if name == "backup_verify":
                 ok = m.get("present") and m.get("overall") == "pass" and not m.get("stale")
                 flat[f"{host}.backup_verify.ok"] = 1 if ok else 0
