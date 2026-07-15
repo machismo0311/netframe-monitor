@@ -199,6 +199,13 @@ def build_context(state, changes, trends):
     # transitively depends on it from the knowledge graph, so impact is grounded not guessed.
     failed = [h for h, checks in state.get("nodes", {}).items()
               if any(c.get("verdict") not in ("OK", None) for c in checks.values())]
+    # Also pass "<host>.<check>" for each failing check. The whole service tier
+    # (llm_router, console, report page) lives on the synthetic `monitoring` host, so
+    # host-level granularity alone would resolve every one of those to monitoring_ct103
+    # and blame Grafana for, say, an llm_router outage on Jarvis.
+    failed += [f"{h}.{name}" for h, checks in state.get("nodes", {}).items()
+               for name, c in checks.items()
+               if c.get("verdict") not in ("OK", None)]
     blast = knowledge_impact(failed)
     return {
         "collected_at": state.get("started"),

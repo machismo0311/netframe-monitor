@@ -25,6 +25,28 @@ ALIASES = {
     "monitoring": "monitoring_ct103", "wazuh": "wazuh_vm",
 }
 
+# Individual checks on the synthetic `monitoring` node -> graph entity ids.
+# Host-level aliasing is too coarse here: every service-tier check lives on the SAME
+# pseudo-host, so a failing llm_router check would otherwise resolve to monitoring_ct103
+# and blame Grafana for an outage on Jarvis. Keyed "<host>.<check>".
+CHECK_ALIASES = {
+    "monitoring.llm_router": "llm_router",
+    "monitoring.console_auth": "ops_console",
+    "monitoring.page_auth": "netframe_report",
+    "monitoring.grafana": "monitoring_ct103",
+    "monitoring.loki": "monitoring_ct103",
+    "monitoring.pihole": "pihole_primary",
+}
+
+
+def resolve(name):
+    """Map a telemetry identifier to a graph entity id. Accepts a bare host name or a
+    '<host>.<check>' pair; returns the name unchanged if nothing matches, so an unknown
+    identifier is simply filtered out downstream rather than mis-attributed."""
+    if name in CHECK_ALIASES:
+        return CHECK_ALIASES[name]
+    return ALIASES.get(name, name)
+
 
 def load(path=TOPOLOGY):
     if not os.path.exists(path):
@@ -63,12 +85,13 @@ def dependencies_of(entity, graph=None):
 
 
 def impact_for_failures(failed_hosts, graph=None):
-    """Given telemetry host/service names that are non-OK, return a compact blast-radius
-    map the interpreter can state. Only entities present in the graph are considered."""
+    """Given telemetry identifiers that are non-OK (bare host names and/or '<host>.<check>'
+    pairs), return a compact blast-radius map the interpreter can state. Only entities
+    present in the graph are considered."""
     graph = graph or load()
     result = {}
     for host in failed_hosts:
-        ent = ALIASES.get(host, host)
+        ent = resolve(host)
         if ent not in graph.get("entities", {}):
             continue
         radius = blast_radius(ent, graph)
@@ -82,7 +105,7 @@ def impact_for_failures(failed_hosts, graph=None):
 
 def _print_impact(entity):
     graph = load()
-    ent = ALIASES.get(entity, entity)
+    ent = resolve(entity)
     if ent not in graph.get("entities", {}):
         print(f"unknown entity '{entity}'. Known: {', '.join(sorted(graph['entities']))}")
         return
@@ -105,7 +128,7 @@ def main():
     if cmd == "impact" and len(sys.argv) > 2:
         _print_impact(sys.argv[2])
     elif cmd == "deps" and len(sys.argv) > 2:
-        for d in dependencies_of(ALIASES.get(sys.argv[2], sys.argv[2])):
+        for d in dependencies_of(resolve(sys.argv[2])):
             print(f"  depends on {d['on']}: {d['impact']}")
     elif cmd == "entities":
         g = load()
