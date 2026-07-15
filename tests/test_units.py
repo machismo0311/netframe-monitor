@@ -781,3 +781,33 @@ def test_eval_sandbox_copies_every_module_the_interpreter_imports():
     copied = set(_re.findall(r'"(netframe_\w+)\.py"', evalsrc))
     missing = imported - copied
     assert not missing, f"interpreter imports {missing} but the eval sandbox does not copy them"
+
+
+def test_npm_dns_catches_a_missing_pihole_record():
+    # The exact 2026-07-15 gap: an NPM host with no Pi-hole local record -> MISSING -> WARN,
+    # and the finding names the offending host.
+    bad = ("vault.kylemason.org=OK\nnewsite.kylemason.org=MISSING\ntotal=2 missing=1")
+    assert mon.classify("npm_dns", 0, bad) == "WARN"
+    assert mon.parse_npm_dns(bad)["missing"] == ["newsite.kylemason.org"]
+
+
+def test_npm_dns_all_resolve_is_ok():
+    good = "vault.kylemason.org=OK\nconsole.kylemason.org=OK\ntotal=2 missing=0"
+    assert mon.classify("npm_dns", 0, good) == "OK"
+    assert mon.parse_npm_dns(good)["missing_count"] == 0
+
+
+def test_npm_dns_enumerate_failure_is_warn_not_silently_ok():
+    # If the host list can't be read (LXC/NPM issue), do NOT report green - inconclusive.
+    out = "enumerate=FAIL\ntotal=0 missing=0"
+    assert mon.classify("npm_dns", 0, out) == "WARN"
+    assert mon.parse_npm_dns(out)["enumerate_ok"] is False
+
+
+def test_npm_dns_wrapper_emits_no_secrets():
+    # Check the EXECUTABLE lines only (comments legitimately mention "no password").
+    # No echo/printf line may reference a secret source; output is hostnames + status.
+    src = open(os.path.join(BASE, "node-local", "pve3-nfm-npm-dns-audit")).read()
+    code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+    for bad in ("password", "secret", "token", "api_key", "credential"):
+        assert bad not in code.lower(), f"wrapper code references {bad!r}"

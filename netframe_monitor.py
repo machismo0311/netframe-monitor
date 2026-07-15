@@ -80,6 +80,11 @@ MONITORING_GUESTS = {"grafana", "wazuh", "prometheus", "loki",
 # probed from *inside* CT 103 via a fixed, root-owned, sudoers-pinned wrapper
 # (/usr/local/sbin/nfm-prom-health) — the monitor cannot pass it any arguments.
 PROMETHEUS = "sudo -n /usr/local/sbin/nfm-prom-health"
+# NPM-vs-Pi-hole DNS audit (runs on pve3, where NPM lives). Enumerates NPM proxy-host
+# server_names and resolves each against the primary Pi-hole - catches a published host
+# with no local DNS record (rebind-stripped -> unresolvable LAN-wide, the 2026-07-15 gap).
+# Arg-free root-owned wrapper; emits only hostnames + OK/MISSING.
+NPM_DNS = "sudo -n /usr/local/sbin/nfm-npm-dns-audit"
 # Loki is network-reachable; buildinfo is a stable up-signal (avoids /ready 503 flap).
 LOKI = "/usr/bin/curl -fsS -m 5 http://192.168.10.183:3100/loki/api/v1/status/buildinfo"
 # DETECT-01: network-device (OPNsense/EX3400) event signals from Loki (read-only).
@@ -163,7 +168,7 @@ NODES = {
     "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
-    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS}},
+    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS, "npm_dns": NPM_DNS}},
     "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
@@ -439,6 +444,18 @@ def parse_llm_router(out):
     return {"http_code": code, "up": code == 200}
 
 
+def parse_npm_dns(out):
+    """Parse the NPM DNS audit: per-host OK/MISSING lines + a 'total=N missing=M' summary.
+    Keeps the list of missing hostnames so a finding names the exact gap."""
+    m = re.search(r"total=(\d+)\s+missing=(\d+)", out)
+    total = int(m.group(1)) if m else 0
+    missing_ct = int(m.group(2)) if m else 0
+    missing = [ln.split("=")[0] for ln in out.splitlines() if ln.strip().endswith("=MISSING")]
+    enumerate_ok = "enumerate=FAIL" not in out
+    return {"total": total, "missing_count": missing_ct, "missing": missing,
+            "enumerate_ok": enumerate_ok}
+
+
 def parse_llm_router_conformance(out):
     """Parse the conformance wrapper's key=value lines into a dict. Keeps the three
     dimensions (config/runtime/firewall) as SEPARATE fields - never collapsed - so the
@@ -492,6 +509,7 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "console_backend": parse_llm_router, "report_backend": parse_llm_router,
            "openwebui_reach": parse_llm_router, "console_transact": parse_transact,
            "llm_router_conformance": parse_llm_router_conformance,
+           "npm_dns": parse_npm_dns,
            "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog}
 
 
@@ -548,6 +566,14 @@ def classify(name, rc, out):
         # backend didn't answer (the loopback-bind case); 000 = DNS or NPM itself down.
         m = re.search(r"HTTP\s+(\d{3})", out)
         return "OK" if (m and m.group(1) == "200") else "WARN"
+    if name == "npm_dns":
+        # WARN if any published NPM host does not resolve on Pi-hole (a missing local
+        # record). If enumeration failed or 0 hosts came back, that is inconclusive (LXC
+        # 101 / NPM issue), also WARN so it is not silently green. All-resolve = OK.
+        d = parse_npm_dns(out)
+        if not d["enumerate_ok"] or d["total"] == 0:
+            return "WARN"
+        return "OK" if d["missing_count"] == 0 else "WARN"
     if name == "llm_router_conformance":
         # OK only when ALL three dimensions pass. But the per-dimension verdicts in the
         # metrics are what the interpreter reads to say WHICH failed (config -> edit the
