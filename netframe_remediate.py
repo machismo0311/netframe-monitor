@@ -64,10 +64,16 @@ ALLOWLIST = {
         "rollback": "None; restarting a failed indexer only moves it toward healthy.",
         "data_risk": "none (in-place service restart; power-cycle would risk corruption, so "
                      "this does NOT power-cycle).",
-        # Executes via the quarkylab host + guest agent; requires that access to be wired.
-        "argv": ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-                 "root@192.168.10.179", "qm guest exec 104 -- systemctl restart wazuh-indexer"],
-        "needs_access": "root SSH Jarvis->quarkylab (not the scoped monitor key).",
+        # Executes via the scoped monitor user + a root-owned argument-free wrapper on
+        # QuarkyLab pinned in sudoers (the nfm-prom-health pattern). NEVER root SSH:
+        # the monitoring box must not hold a root path into the protected GPU node
+        # (maturity review JAR-11).
+        "argv": ["/usr/bin/ssh", "-i", f"{BASE}/monitor_key", "-o", "BatchMode=yes",
+                 "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new",
+                 "monitor@192.168.10.179",
+                 "sudo -n /usr/local/sbin/nfm-wazuh-indexer-restart"],
+        "needs_access": "wrapper /usr/local/sbin/nfm-wazuh-indexer-restart + sudoers pin "
+                        "on quarkylab; fails safely (sudo -n denial) until installed.",
     },
 }
 
