@@ -1,0 +1,41 @@
+#!/bin/sh
+# NetFRAME monitor: NPM-vs-Pi-hole DNS-record audit (runs on pve3, where NPM lives).
+#
+# Catches the exact failure class from 2026-07-15: a published NPM proxy host with NO
+# Pi-hole local DNS record. Such a name has a public Cloudflare record -> private .181,
+# which Pi-hole/dnsmasq rebind-protection strips, so it is UNRESOLVABLE for every LAN
+# client while looking fine over public DNS. That silently broke vault/grafana/wazuh.
+#
+# Method: enumerate NPM proxy-host server_names from the LXC-101 bind mount (no admin API,
+# no password), then resolve each EXPLICITLY against the primary Pi-hole (.177) - not the
+# system resolver, which on pve3 is public DNS and would mask the rebind-strip. Emits one
+# "name=OK|MISSING" line per host plus a summary. Only hostnames + status; no secrets.
+#
+# Root-owned, argument-free by design so sudoers can pin it exactly (the `pct exec` needs
+# root; the wrapper is the only thing the monitor user may invoke here).
+PIHOLE=192.168.10.177
+CONF=/opt/nginx-proxy-manager/data/nginx/proxy_host
+
+names=$(/usr/sbin/pct exec 101 -- sh -c "grep -hoE 'server_name [^;]+;' $CONF/*.conf 2>/dev/null" \
+        2>/dev/null | sed 's/server_name //; s/;//' | sort -u)
+
+if [ -z "$names" ]; then
+	echo "enumerate=FAIL"          # could not read NPM host list (LXC/NPM issue)
+	echo "total=0 missing=0"
+	exit 0
+fi
+
+total=0
+missing=0
+for n in $names; do
+	total=$((total + 1))
+	ans=$(/usr/bin/dig +short +time=3 +tries=1 @"$PIHOLE" "$n" A 2>/dev/null \
+	      | grep -E '^[0-9]' | head -1)
+	if [ -n "$ans" ]; then
+		echo "$n=OK"
+	else
+		echo "$n=MISSING"
+		missing=$((missing + 1))
+	fi
+done
+echo "total=$total missing=$missing"
