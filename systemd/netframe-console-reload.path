@@ -1,0 +1,20 @@
+[Unit]
+Description=Watch the ops-console source and restart it on change
+# The console is a long-lived daemon (netframe-console.service, Type=simple): it imports
+# its Python modules ONCE at startup, so copying new code to /opt does NOT take effect
+# until a restart - unlike the oneshot report timers that re-exec every run. This path
+# unit closes that gap automatically: any change to a module the console imports triggers
+# a debounced restart, regardless of how the file arrived (scp, rsync, manual edit).
+Documentation=file:/opt/netframe-monitor/README.md
+
+[Path]
+PathModified=/opt/netframe-monitor/netframe_console.py
+PathModified=/opt/netframe-monitor/netframe_chat.py
+PathModified=/opt/netframe-monitor/netframe_evidence.py
+PathModified=/opt/netframe-monitor/netframe_policy.py
+PathModified=/opt/netframe-monitor/netframe_retrieve.py
+PathModified=/opt/netframe-monitor/netframe_knowledge.py
+PathModified=/opt/netframe-monitor/netframe_audit.py
+
+[Install]
+WantedBy=multi-user.target

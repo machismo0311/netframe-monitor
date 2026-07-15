@@ -88,12 +88,21 @@ blanket `pct`/`qm`, which could start/stop/destroy guests:
 
 ```bash
 # from this directory, on a host with ssh access to jarvis
-scp netframe_monitor.py netframe_interpret.py netframe-run.sh netframe-8808-lock.sh \
+scp *.py netframe-run.sh netframe-8808-lock.sh netframe-console-lock.sh \
     jarvis:/opt/netframe-monitor/
-scp systemd/*.service systemd/*.timer jarvis:/etc/systemd/system/
+scp systemd/*.service systemd/*.timer systemd/*.path jarvis:/etc/systemd/system/
 ssh jarvis 'chmod +x /opt/netframe-monitor/*.sh && systemctl daemon-reload \
-    && systemctl enable --now netframe-monitor.timer netframe-report-web.service netframe-8808-lock.service'
+    && systemctl enable --now netframe-monitor.timer netframe-report-web.service \
+       netframe-8808-lock.service netframe-console.service netframe-console-reload.path'
 ```
+
+> **The ops console is a long-lived daemon** (`netframe-console.service`, `Type=simple`):
+> it imports its Python modules once at startup, so copying new code does NOT take effect
+> until a restart, unlike the oneshot report timers that re-exec each run. This is handled
+> automatically by **`netframe-console-reload.path`**, which watches the console's source
+> files and does a debounced restart on any change. No manual `systemctl restart
+> netframe-console.service` is needed after a deploy. (It will not resurrect a console you
+> deliberately stopped.)
 
 Check it:
 
