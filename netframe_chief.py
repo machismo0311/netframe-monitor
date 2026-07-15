@@ -20,6 +20,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import netframe_policy  # noqa: E402 - path first; the gate is mandatory
+import netframe_evidence  # noqa: E402 - shared evidence engine
 
 BASE = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
 CONSTITUTION_DIR = f"{BASE}/constitution"
@@ -128,6 +129,8 @@ def main():
     # Same deterministic gate as every other LLM->operator path (NF-AIOPS-004 safety phase).
     # The chief report is the most dangerous of the three: it is the one synthesised on the
     # 72B and read as an executive prioritisation, so an unsafe P0 here carries authority.
+    # Shared deterministic evidence + confidence per material finding (NF-AIOPS-005).
+    body += netframe_evidence.section_for_current_state(BASE)
     body, _ = netframe_policy.enforce(body, source="chief")
     report = (f"# NetFRAME Weekly Chief Engineer Report\n\n_Generated {now.isoformat()} by "
               f"{MODEL} on Jarvis · read-only, recommend-only_\n\n---\n\n{body}\n")
