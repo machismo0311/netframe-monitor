@@ -29,6 +29,7 @@ REFRESH = int(os.environ.get("NETFRAME_WEB_REFRESH", "900"))
 
 # tab id, label, markdown source path (None => rendered specially)
 TABS = [
+    ("chief", "Chief report", f"{BASE}/report-chief.md"),
     ("health", "Health", f"{BASE}/report.md"),
     ("predict", "Predict", f"{BASE}/report-predict.md"),
     ("drift", "Config drift", f"{BASE}/report-confdrift.md"),

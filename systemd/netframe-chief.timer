@@ -1,0 +1,10 @@
+[Unit]
+Description=NetFRAME weekly Chief Engineer report timer (Sun ~08:05, after the GitHub review)
+
+[Timer]
+OnCalendar=Sun 08:05:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
