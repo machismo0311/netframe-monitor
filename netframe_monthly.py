@@ -12,7 +12,11 @@ and its timer. Cadence: monthly (netframe-monthly.timer)."""
 import datetime as dt
 import json
 import os
+import sys
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netframe_policy  # noqa: E402 - path first; the gate is mandatory
 
 BASE = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
 HISTORY = f"{BASE}/history.jsonl"
@@ -128,6 +132,8 @@ def main():
         except Exception as e:  # noqa: BLE001 - report degraded, never crash the timer
             body = (f"## Posture this month\nLLM unavailable ({e}); raw 30d summary:\n\n"
                     f"```json\n{json.dumps(summary, indent=2)}\n```")
+    # Same deterministic gate as every other LLM->operator path (NF-AIOPS-004 safety phase).
+    body, _ = netframe_policy.enforce(body, source="monthly")
     report = (f"# NetFRAME Monthly Maturity Report\n\n_Generated {now.isoformat()} by {MODEL} "
               f"on Jarvis · {summary.get('runs', 0)} runs · "
               f"{summary.get('coverage_days', 0)}d of {DAYS}d window_\n\n---\n\n{body}\n")

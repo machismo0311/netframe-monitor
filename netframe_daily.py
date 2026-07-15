@@ -10,7 +10,11 @@ this file and its timer."""
 import datetime as dt
 import json
 import os
+import sys
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netframe_policy  # noqa: E402 - path first; the gate is mandatory
 
 BASE = "/opt/netframe-monitor"
 HISTORY_FILE = f"{BASE}/history.jsonl"
@@ -141,6 +145,9 @@ def main():
         except Exception as e:  # noqa: BLE001 - report degraded, never crash the timer
             body = (f"## Day summary\nLLM unavailable ({e}); raw 24h summary follows.\n\n"
                     f"```json\n{json.dumps(summary, indent=2)}\n```")
+    # Same deterministic gate as every other LLM->operator path. No report type gets a
+    # weaker boundary than another (NF-AIOPS-004 safety phase).
+    body, _ = netframe_policy.enforce(body, source="daily")
     header = (f"# NetFRAME Daily Rollup\n\n_Generated {now.isoformat()} by {MODEL} on Jarvis · "
               f"{summary.get('runs', 0)} runs in the last 24h_\n\n---\n\n")
     report = header + body + "\n"

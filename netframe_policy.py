@@ -297,6 +297,49 @@ def _audit(blocked, source):
         print(f"WARN: policy block not audited: {exc}", file=sys.stderr)
 
 
+def enforce(text, source, state=None):
+    """THE gate. Every LLM-generated path to operator-visible output calls exactly this.
+
+        LLM generation -> enforce() -> allowed  -> operator output
+                                    -> blocked  -> visible notice + audit ledger
+
+    One function rather than per-path screening, so the rules cannot drift between paths
+    and a new report type cannot quietly acquire a weaker boundary. Callers pass their
+    source name and, if they already have it, the telemetry state; otherwise it is loaded
+    here so evidence-gated rules behave identically everywhere.
+
+    Fails LOUD but not CLOSED: if the screen itself errors, the artifact is emitted with a
+    prominent warning that it is UNSCREENED. An operator holding a report marked unverified
+    is better off than one holding no report and no explanation.
+    """
+    try:
+        if state is None:
+            state = _load_state()
+        verdict = screen(text, evidence=evidence_from_state(state), source=source)
+        if verdict["blocked"]:
+            rules = ", ".join(sorted({b["rule_id"] for b in verdict["blocked"]}))
+            print(f"POLICY[{source}]: blocked {len(verdict['blocked'])} "
+                  f"recommendation(s) [{rules}]", file=sys.stderr)
+        return verdict["text"], verdict["blocked"]
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        print(f"WARN: policy screen errored for {source} ({exc}); output NOT screened",
+              file=sys.stderr)
+        return (text + "\n\n---\n**Safety note (deterministic):** the prohibited-"
+                "recommendation screen failed to run on this output, so its recommendations "
+                "are UNSCREENED against Jarvis policy. Treat any action it suggests as "
+                "unverified.", [])
+
+
+def _load_state():
+    base = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
+    try:
+        import json
+        with open(f"{base}/last_run.json") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
 def evidence_from_state(state):
     """Deterministic evidence for the evidence-gated rules, derived from telemetry only.
 
