@@ -20,6 +20,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import netframe_policy  # noqa: E402 - path first; the gate is mandatory
+import netframe_evidence  # noqa: E402 - shared evidence engine
 
 BASE = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
 HISTORY = f"{BASE}/history.jsonl"
@@ -184,6 +185,12 @@ def main():
     # place in the whole system to produce an EVT-003 "replace the drive" recommendation
     # off a benign pending-sector count. The deterministic tables below are unaffected -
     # only the model's prose passes through here.
+    # Shared deterministic evidence + confidence per material finding (NF-AIOPS-005).
+    # Predict is the highest-value place for it: its subject IS drive-failure risk, so a
+    # confidence number on any "replace" narration is exactly what stops an EVT-003 false
+    # positive from reading as certain. Complements the deterministic tables (which score
+    # trend risk); this scores the evidence behind the current non-OK findings.
+    summary += netframe_evidence.section_for_current_state(BASE)
     summary, _ = netframe_policy.enforce(summary, source="predict")
     report = (f"# NetFRAME Predictive Report (fix before it breaks)\n\n"
               f"_Generated {now.isoformat()} on Jarvis · {runs} runs / {DAYS}d window · "
