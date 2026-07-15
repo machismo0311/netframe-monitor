@@ -74,6 +74,53 @@ def test_llm_router_200_ok_502_warn():
     assert mon.classify("llm_router", 0, "") == "WARN"
 
 
+def _knowledge():
+    import importlib.util
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.environ["NETFRAME_BASE"] = here
+    spec = importlib.util.spec_from_file_location(
+        "k", os.path.join(here, "netframe_knowledge.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_topology_has_no_dangling_edges():
+    k = _knowledge()
+    g = k.load()
+    ids = set(g["entities"])
+    dangling = [d for d in g["dependencies"]
+                if d["dependent"] not in ids or d["on"] not in ids]
+    assert not dangling, dangling
+
+
+def test_check_alias_resolves_to_service_not_host():
+    # Every service-tier check lives on the synthetic `monitoring` host. Without
+    # check-level resolution a failing llm_router would resolve to monitoring_ct103 and
+    # blame Grafana for an outage on Jarvis.
+    k = _knowledge()
+    assert k.resolve("monitoring.llm_router") == "llm_router"
+    assert k.resolve("monitoring.console_auth") == "ops_console"
+    assert k.resolve("monitoring") == "monitoring_ct103"
+    assert k.resolve("randy") == "randy"
+    assert k.resolve("totally-unknown") == "totally-unknown"
+
+
+def test_blast_radius_explains_the_20260714_incident():
+    # The bind regressed to loopback; Open WebUI (another host) broke while the page
+    # still loaded. The graph must be able to state that chain.
+    k = _knowledge()
+    hit = {r["entity"] for r in k.blast_radius("llm_router_bind")}
+    assert "llm_router" in hit
+    assert "open_webui" in hit
+
+
+def test_ollama_failure_reaches_both_chat_surfaces():
+    k = _knowledge()
+    hit = {r["entity"] for r in k.blast_radius("ollama")}
+    assert {"llm_router", "open_webui", "ops_console"} <= hit
+
+
 def test_llm_router_probes_via_npm_not_localhost():
     # Regression guard for the actual 2026-07-14 outage: llm_router stayed "active"
     # and localhost:8000 answered 200 while its bind had regressed to 127.0.0.1, so

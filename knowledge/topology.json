@@ -24,7 +24,18 @@
     "jarvis_memory_backup": {"type": "workload", "role": "Jarvis operational-memory nightly backup"},
     "ares_backup": {"type": "workload", "role": "Ares workstation nightly backup"},
     "guest_backups": {"type": "workload", "role": "all Proxmox guest backups"},
-    "corosync_quorum": {"type": "cluster", "role": "km-cluster corosync quorum"}
+    "corosync_quorum": {"type": "cluster", "role": "km-cluster corosync quorum"},
+
+    "ollama": {"type": "service", "on": "jarvis", "role": "local inference engine (:11434, 2x RTX 6000, qwen2.5 7b/72b)"},
+    "llm_router": {"type": "service", "on": "jarvis", "role": "OpenAI-compatible router (:8000); the only path Open WebUI has to a model"},
+    "llm_router_fw": {"type": "config", "on": "jarvis", "role": "iptables allowlist on :8000 (llm-router-lock); llm_router has no auth of its own"},
+    "llm_router_bind": {"type": "config", "on": "jarvis", "role": "LLM_ROUTER_HOST=0.0.0.0; loopback bind makes the router unreachable off-host"},
+    "npm": {"type": "service", "on": "pve3", "role": "nginx-proxy-manager (CT101, .181); reverse proxy + TLS + Basic auth for every published hostname"},
+    "pihole_dns_records": {"type": "config", "role": "Pi-hole local DNS records; public hostnames -> private .181 are rebind-stripped without them"},
+    "open_webui": {"type": "workload", "on": "pve3", "role": "Open WebUI chat UI (CT107, VLAN30 .30.185)"},
+    "ops_console": {"type": "workload", "on": "jarvis", "role": "NetFRAME operations console (:8809, console.kylemason.org)"},
+    "netframe_report": {"type": "workload", "on": "jarvis", "role": "NetFRAME health report page (:8808, health.kylemason.org)"},
+    "netframe_monitor": {"type": "service", "on": "jarvis", "role": "the collector/interpreter itself; every report and check originates here"}
   },
   "dependencies": [
     {"dependent": "randy_nfs", "on": "randy", "impact": "NFS export offline"},
@@ -43,6 +54,24 @@
     {"dependent": "randy", "on": "ex3400", "impact": "storage unreachable at L2"},
     {"dependent": "quarkylab", "on": "ex3400", "impact": "GPU host unreachable at L2"},
     {"dependent": "corosync_quorum", "on": "ex3400", "impact": "cluster heartbeat disrupted; quorum at risk"},
-    {"dependent": "rke2_pvcs", "on": "opnsense", "impact": "inter-node/VLAN path lost"}
+    {"dependent": "rke2_pvcs", "on": "opnsense", "impact": "inter-node/VLAN path lost"},
+
+    {"dependent": "ollama", "on": "jarvis", "impact": "no local inference; every LLM-backed feature degrades or stops"},
+    {"dependent": "llm_router", "on": "ollama", "impact": "router cannot serve model=local/rag; 503 unless the Claude fallback is keyed"},
+    {"dependent": "llm_router", "on": "jarvis", "impact": "router offline"},
+    {"dependent": "llm_router", "on": "llm_router_bind", "impact": "loopback bind: router stays 'active' and answers on localhost, but is unreachable from every other host"},
+    {"dependent": "llm_router", "on": "llm_router_fw", "impact": "allowlist wrong/absent: NPM and Open WebUI are dropped at :8000; llm.netframe.local returns 502"},
+    {"dependent": "open_webui", "on": "llm_router", "impact": "chat UI still loads, but every message fails - the failure is invisible from the page alone"},
+    {"dependent": "open_webui", "on": "pve3", "impact": "chat UI offline"},
+    {"dependent": "open_webui", "on": "npm", "impact": "chat.netframe.local unreachable"},
+    {"dependent": "npm", "on": "pve3", "impact": "every published hostname unreachable (vault/grafana/homepage/wazuh/health/console/chat/llm)"},
+    {"dependent": "npm", "on": "pihole_dns_records", "impact": "published hostnames stop resolving for all LAN clients (rebind protection strips private answers)"},
+    {"dependent": "ops_console", "on": "npm", "impact": "console.kylemason.org unreachable"},
+    {"dependent": "ops_console", "on": "ollama", "impact": "console loads but cannot answer questions"},
+    {"dependent": "ops_console", "on": "netframe_monitor", "impact": "console serves stale or empty state"},
+    {"dependent": "netframe_report", "on": "npm", "impact": "health.kylemason.org unreachable"},
+    {"dependent": "netframe_report", "on": "netframe_monitor", "impact": "report page goes stale"},
+    {"dependent": "netframe_monitor", "on": "jarvis", "impact": "all monitoring stops; absence of alerts stops meaning health (NetframeMonitorStale dead-man covers this)"},
+    {"dependent": "jarvis_memory_backup", "on": "netframe_monitor", "impact": "nothing new to back up; operational memory stops advancing"}
   ]
 }
