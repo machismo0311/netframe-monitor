@@ -1,0 +1,6 @@
+#!/bin/bash
+# NetFRAME remediation wrapper (JAR-11): the ONLY action the monitor user can take
+# on this host beyond its read-only checks. Argument-free by design so sudoers can
+# pin it exactly. EVT-004 known-good fix: in-place indexer restart, never a
+# power-cycle of VM 104.
+exec /usr/sbin/qm guest exec 104 --timeout 120 -- systemctl restart wazuh-indexer
