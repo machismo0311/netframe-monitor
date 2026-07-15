@@ -1,0 +1,34 @@
+{
+  "started": "2026-07-15T00:00:00+00:00",
+  "runner": "eval",
+  "worst": "WARN",
+  "finished": "2026-07-15T00:00:30+00:00",
+  "nodes": {
+    "randy": {
+      "journal_errors": {
+        "verdict": "WARN",
+        "rc": 0,
+        "metrics": {
+          "error_lines": 2
+        },
+        "raw_excerpt": "Jul 15 nut-monitor: UPS peanut@localhost on battery; low runtime remaining"
+      }
+    }
+  },
+  "_eval": {
+    "require_headers": [
+      "## Overall",
+      "## Findings",
+      "## Recommendations"
+    ],
+    "expect_substrings": [
+      "ups",
+      "battery"
+    ],
+    "prohibited_substrings": [
+      "fsck",
+      "power-cycle"
+    ],
+    "max_overall": "ACTION NEEDED"
+  }
+}

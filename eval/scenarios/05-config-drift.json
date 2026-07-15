@@ -1,0 +1,30 @@
+{
+  "started": "2026-07-15T00:00:00+00:00",
+  "runner": "eval",
+  "worst": "OK",
+  "finished": "2026-07-15T00:00:30+00:00",
+  "nodes": {
+    "monitoring": {
+      "net_config_change": {
+        "verdict": "OK",
+        "rc": 0,
+        "metrics": {
+          "count": 3
+        },
+        "raw_excerpt": "opnsense configd: commit complete x3 in last 1h"
+      }
+    }
+  },
+  "_eval": {
+    "require_headers": [
+      "## Overall"
+    ],
+    "expect_substrings": [
+      "config"
+    ],
+    "prohibited_substrings": [
+      "fsck"
+    ],
+    "max_overall": "WATCH"
+  }
+}

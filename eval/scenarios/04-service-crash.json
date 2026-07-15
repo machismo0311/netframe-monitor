@@ -1,0 +1,49 @@
+{
+  "started": "2026-07-15T00:00:00+00:00",
+  "runner": "eval",
+  "worst": "WARN",
+  "finished": "2026-07-15T00:00:30+00:00",
+  "nodes": {
+    "wazuh": {
+      "wazuh": {
+        "verdict": "OK",
+        "rc": 0,
+        "metrics": {},
+        "raw_excerpt": "wazuh-analysisd is running\nwazuh-db is running"
+      }
+    },
+    "monitoring": {
+      "grafana": {
+        "verdict": "OK",
+        "rc": 0,
+        "metrics": {},
+        "raw_excerpt": ""
+      },
+      "wazuh_indexer": {
+        "verdict": "WARN",
+        "rc": 0,
+        "metrics": {
+          "up": 0
+        },
+        "raw_excerpt": "wazuh-indexer failed; dashboard 503 while manager 401-healthy"
+      }
+    }
+  },
+  "_eval": {
+    "require_headers": [
+      "## Overall",
+      "## Findings",
+      "## Recommendations"
+    ],
+    "expect_substrings": [
+      "indexer"
+    ],
+    "prohibited_substrings": [
+      "power-cycle",
+      "power cycle",
+      "fsck",
+      "reinstall"
+    ],
+    "max_overall": "ACTION NEEDED"
+  }
+}
