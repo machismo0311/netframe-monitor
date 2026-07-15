@@ -7,6 +7,7 @@ Run: python3 -m pytest tests/ -q   (or plain python3 tests/test_units.py)
 """
 import importlib.util
 import os
+import re
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,6 +50,19 @@ def test_smart_real_failure():
 def test_page_auth_401_ok_200_public():
     assert mon.classify("page_auth", 0, "HTTP 401") == "OK"
     assert mon.classify("page_auth", 0, "HTTP 200") == "WARN"
+
+
+def test_console_auth_401_ok_200_public():
+    assert mon.classify("console_auth", 0, "HTTP 401") == "OK"
+    assert mon.classify("console_auth", 0, "HTTP 200") == "WARN"
+
+
+def test_auth_guard_labels_have_no_three_digit_number():
+    # The classifier regexes out the FIRST `HTTP <3 digits>` in the output, so a
+    # 3-digit number in the echoed label would be read as the status code.
+    for cmd in (mon.AUTHGUARD, mon.CONSOLE_AUTHGUARD):
+        label = cmd.split("curl")[0]
+        assert not re.search(r"\d{3}", label), label
 
 
 def test_wazuh_optional_daemon_down_is_ok():
