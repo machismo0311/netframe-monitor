@@ -170,7 +170,29 @@ def analyze_repo(meta, token):
     else:
         facts["last_commit_subject"] = None
     facts["secret_scan"] = secret_signal(o, n, token)
+    facts.update(deep_facts(o, n, token))
     return facts
+
+
+def deep_facts(o, n, token):
+    """The facts a senior reviewer actually checks: does CI pass, branch/PR hygiene,
+    submodules, and declared dependencies. All read-only over the REST API."""
+    f = {}
+    # latest CI run conclusion: a green rubric on a repo with failing CI is misleading
+    st, runs, _ = api(f"/repos/{o}/{n}/actions/runs", token, {"per_page": 1})
+    if st == 200 and (runs or {}).get("workflow_runs"):
+        f["ci_conclusion"] = runs["workflow_runs"][0].get("conclusion")  # success/failure/None
+    else:
+        f["ci_conclusion"] = None
+    st, branches, _ = api(f"/repos/{o}/{n}/branches", token, {"per_page": 100})
+    f["branch_count"] = len(branches) if st == 200 and isinstance(branches, list) else 1
+    st, pulls, _ = api(f"/repos/{o}/{n}/pulls", token, {"state": "open", "per_page": 100})
+    f["open_prs"] = len(pulls) if st == 200 and isinstance(pulls, list) else 0
+    f["has_submodules"] = exists(f"/repos/{o}/{n}/contents/.gitmodules", token)
+    f["dependency_manifest"] = next(
+        (m for m in ("requirements.txt", "package.json", "go.mod", "pyproject.toml", "Gemfile")
+         if exists(f"/repos/{o}/{n}/contents/{m}", token)), None)
+    return f
 
 
 def secret_signal(o, n, token):
@@ -222,7 +244,13 @@ def score(f):
         s += 5
     elif sec.get("available") and sec.get("open", 0) > 0:
         issues.append(f"{sec['open']} open secret-scanning alert(s)")
-    return min(s, 100), issues
+    # a green rubric on a repo whose CI is actually FAILING is misleading; dock it hard
+    if f.get("ci_conclusion") == "failure":
+        issues.append("CI is FAILING on the latest run")
+        s -= 15
+    if (f.get("open_prs") or 0) > 5:
+        issues.append(f"{f['open_prs']} stale open PRs")
+    return max(0, min(s, 100)), issues
 
 
 def narrate(rows):
@@ -240,11 +268,39 @@ def narrate(rows):
         return json.loads(resp.read().decode())["message"]["content"].strip()
 
 
+RECRUITER_PROMPT = (
+    "You are a Fortune 500 hiring manager for a senior infrastructure/SRE role. You have "
+    "90 SECONDS to form a first impression of this candidate's GitHub from the objective "
+    "facts given (do not invent any). Write a short Markdown block with EXACTLY these "
+    "headers:\n## 90-second impression\n## Scores\n## What lands / what hurts\n"
+    "Under Scores, give each 0-100 with one clause of justification: First impression, "
+    "Technical maturity, Documentation, Engineering discipline, Portfolio strength. Under "
+    "the impression, write the two or three sentences a hiring manager would actually think. "
+    "Be candid, not flattering. No em dashes.")
+
+
+def recruiter_review(rows):
+    facts = json.dumps([{k: r.get(k) for k in
+                         ("name", "visibility", "score", "description", "topics",
+                          "has_ci", "ci_conclusion", "readme_bytes", "stale_days",
+                          "has_submodules", "dependency_manifest", "open_prs", "issues")}
+                        for r in rows], indent=2)
+    payload = {"model": MODEL, "stream": False, "options": {"temperature": 0.2},
+               "messages": [{"role": "system", "content": RECRUITER_PROMPT},
+                            {"role": "user", "content": "PORTFOLIO FACTS:\n" + facts}]}
+    req = urllib.request.Request(OLLAMA_URL, data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())["message"]["content"].strip()
+
+
 def table(rows):
-    out = ["| Repo | Vis | Score | Key gaps |", "|---|---|---|---|"]
+    out = ["| Repo | Vis | Score | CI | Key gaps |", "|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda x: -(x["score"])):
         gaps = ", ".join(r["issues"][:3]) or "none"
-        out.append(f"| {r['name']} | {r['visibility']} | {r['score']} | {gaps} |")
+        ci = {"success": "pass", "failure": "FAIL", None: "-"}.get(r.get("ci_conclusion"),
+                                                                    r.get("ci_conclusion") or "-")
+        out.append(f"| {r['name']} | {r['visibility']} | {r['score']} | {ci} | {gaps} |")
     return "\n".join(out)
 
 
@@ -267,8 +323,13 @@ def main():
             review = narrate(rows) if rows else "_No repos to review._"
         except Exception as e:  # noqa: BLE001 - degrade, never crash the timer
             review = f"_LLM synthesis unavailable ({e}); the rubric table above stands alone._"
+        try:
+            recruiter = recruiter_review(rows) if rows else ""
+        except Exception as e:  # noqa: BLE001
+            recruiter = f"_Recruiter simulation unavailable ({e})._"
         body = (f"**Portfolio health: {avg}/100** across {len(rows)} repo(s), {mode}.\n\n"
-                f"{table(rows)}\n\n---\n\n{review}")
+                f"{table(rows)}\n\n---\n\n{review}\n\n---\n\n"
+                f"# Recruiter Simulation Mode\n\n{recruiter}")
     if token_note:
         body = f"**Token status:** {token_note}\n\n{body}"
         print(f"TOKEN NOTE: {token_note}")
