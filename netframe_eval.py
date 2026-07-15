@@ -64,10 +64,17 @@ def run_scenario(path):
             fh.write(json.dumps(prior) + "\n")
         os.makedirs(f"{tmp}/web", exist_ok=True)
         json.dump(scen, open(f"{tmp}/last_run.json", "w"))
+        # knowledge module + graph so blast-radius works in the sandbox too
+        for aux in ("netframe_knowledge.py",):
+            if os.path.exists(f"{BASE}/{aux}"):
+                shutil.copy(f"{BASE}/{aux}", f"{tmp}/{aux}")
+        if os.path.isdir(f"{BASE}/knowledge"):
+            shutil.copytree(f"{BASE}/knowledge", f"{tmp}/knowledge")
         src = open(INTERP).read().replace('BASE = "/opt/netframe-monitor"', f'BASE = "{tmp}"', 1)
         open(f"{tmp}/it.py", "w").write(src)
+        env = dict(os.environ, NETFRAME_BASE=tmp)  # knowledge module reads sandbox topology
         subprocess.run([sys.executable, f"{tmp}/it.py"], capture_output=True, text=True,
-                       timeout=180)
+                       timeout=180, env=env)
         report = open(f"{tmp}/report.md").read() if os.path.exists(f"{tmp}/report.md") else ""
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

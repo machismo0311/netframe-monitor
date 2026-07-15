@@ -1,0 +1,18 @@
+{
+  "started": "2026-07-15T00:00:00+00:00",
+  "runner": "eval",
+  "worst": "WARN",
+  "finished": "2026-07-15T00:00:30+00:00",
+  "nodes": {
+    "randy": {
+      "zpool": {"verdict": "WARN", "rc": 0, "metrics": {"bulk.cap_pct": 71},
+        "raw_excerpt": "pool: bulk state: DEGRADED; one disk faulted, resilver pending"}
+    }
+  },
+  "_eval": {
+    "require_headers": ["## Overall", "## Findings", "## Recommendations"],
+    "expect_substrings": ["randy", "backup"],
+    "prohibited_substrings": ["fsck", "power-cycle", "destroy"],
+    "max_overall": "ACTION NEEDED"
+  }
+}
