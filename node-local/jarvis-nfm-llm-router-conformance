@@ -1,0 +1,122 @@
+#!/bin/sh
+# NetFRAME conformance wrapper (NF-AIOPS-004 Phase 3): llm_router on Jarvis.
+#
+# DESIGN REVIEW ARTIFACT - not yet deployed. See the sudoers pin at the bottom.
+#
+# The ONLY thing the monitor user may invoke here beyond its read-only checks.
+# Root-owned, argument-free by design so sudoers can pin it exactly. It answers
+# THREE independent questions and never collapses them into one health boolean,
+# because the operator's next action differs entirely by which one fails:
+#
+#   CONFIG   - does declared intent match /etc/llm_router.env?   (edit the file)
+#   RUNTIME  - is the process actually bound as intended?        (restart the unit)
+#   FIREWALL - is the :8000 allowlist enforcing the intended path? (reassert the lock)
+#
+# INVARIANTS (enforced by construction, reviewed as security):
+#   - Root owned, mode 0755, no arguments accepted, no stdin read.
+#   - Emits ONLY: fixed key names, PASS/FAIL/UNKNOWN, and expected-vs-actual
+#     tokens that are themselves non-secret (an interface address, a bind string).
+#   - NEVER prints file contents, env VALUES for anything but the two non-secret
+#     keys it asserts, API keys, tokens, or credentials. It greps two specific
+#     keys by name and compares to a hardcoded expectation; it never cats the file.
+#   - No LLM involvement anywhere. Pure shell + iptables/ss reads.
+#
+# Output is line-oriented key=value, parsed deterministically by the collector.
+
+set -u
+PORT=8000
+ENV_FILE=/etc/llm_router.env
+
+# --- Declared intent (the source of truth, hardcoded HERE, reviewed in Git) ------
+# These are the ONLY env keys read, both non-secret. Values are asserted, not dumped.
+EXPECT_HOST=0.0.0.0
+EXPECT_PORT=8000
+# The intended :8000 allowlist: localhost + NPM(both legs) + Open WebUI. Sorted set.
+EXPECT_ALLOW="127.0.0.1 192.168.10.181 192.168.30.181 192.168.30.185"
+
+emit() { printf '%s\n' "$1"; }
+
+# ---- CONFIG: declared intent vs the live env file (two keys, by name) -----------
+# grep a single key; take the value after '='. Never prints the whole file.
+cfg_val() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '"'; }
+ACT_HOST=$(cfg_val LLM_ROUTER_HOST)
+ACT_PORT=$(cfg_val LLM_ROUTER_PORT)
+if [ -z "$ACT_HOST" ] || [ -z "$ACT_PORT" ]; then
+	CONFIG=UNKNOWN
+elif [ "$ACT_HOST" = "$EXPECT_HOST" ] && [ "$ACT_PORT" = "$EXPECT_PORT" ]; then
+	CONFIG=PASS
+else
+	CONFIG=FAIL
+fi
+emit "config=$CONFIG"
+emit "config_host_expected=$EXPECT_HOST"
+emit "config_host_actual=${ACT_HOST:-MISSING}"
+emit "config_port_expected=$EXPECT_PORT"
+emit "config_port_actual=${ACT_PORT:-MISSING}"
+
+# ---- RUNTIME: is the process actually bound where intent says? -------------------
+# A correct file with a stale process is exactly the 2026-07-14 outage: config PASS,
+# runtime FAIL. That distinction is the point of separating these.
+BIND=$(ss -H -tlnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p {print $4; exit}')
+if [ -z "$BIND" ]; then
+	RUNTIME=FAIL              # nothing listening on :8000
+	RUNTIME_BIND=none
+elif [ "$BIND" = "0.0.0.0:$PORT" ] || [ "$BIND" = "*:$PORT" ]; then
+	RUNTIME=PASS
+	RUNTIME_BIND="$BIND"
+else
+	RUNTIME=FAIL             # bound, but not as intended (e.g. 127.0.0.1:8000 loopback)
+	RUNTIME_BIND="$BIND"
+fi
+emit "runtime=$RUNTIME"
+emit "runtime_bind_expected=0.0.0.0:$PORT"
+emit "runtime_bind_actual=$RUNTIME_BIND"
+
+# ---- FIREWALL: does the :8000 allowlist enforce the intended path? ---------------
+# Summarise the chain as booleans. We assert: every intended source ACCEPTs, a
+# default DROP exists, and NO source outside the intended set is ACCEPTed.
+RULES=$(/usr/sbin/iptables -S INPUT 2>/dev/null | grep -- "--dport $PORT")
+have_drop=0; extra=0; missing=""
+printf '%s\n' "$RULES" | grep -q -- "--dport $PORT -j DROP" && have_drop=1
+for src in $EXPECT_ALLOW; do
+	printf '%s\n' "$RULES" | grep -q -- "-s $src/32 .*ACCEPT" || missing="$missing $src"
+done
+# any ACCEPT whose source is not in the intended set = an unexpected opening
+ACCEPTED=$(printf '%s\n' "$RULES" | grep -- "ACCEPT" | grep -oE "\-s [0-9.]+/32" | awk '{print $2}' | sed 's#/32##')
+for a in $ACCEPTED; do
+	echo "$EXPECT_ALLOW" | grep -qw "$a" || extra=1
+done
+if [ -z "$RULES" ]; then
+	FIREWALL=UNKNOWN
+elif [ "$have_drop" = 1 ] && [ -z "$missing" ] && [ "$extra" = 0 ]; then
+	FIREWALL=PASS
+else
+	FIREWALL=FAIL
+fi
+emit "firewall=$FIREWALL"
+emit "firewall_default_drop=$([ "$have_drop" = 1 ] && echo yes || echo no)"
+emit "firewall_missing_allow=${missing:- none}"
+emit "firewall_unexpected_allow=$([ "$extra" = 1 ] && echo yes || echo no)"
+
+# ---- overall: reported, but the THREE dimensions above are authoritative ---------
+if [ "$CONFIG" = PASS ] && [ "$RUNTIME" = PASS ] && [ "$FIREWALL" = PASS ]; then
+	emit "conformance=PASS"
+else
+	emit "conformance=FAIL"
+fi
+exit 0
+
+# =====================================================================
+# DEPLOY: root:root 0755 at /usr/local/sbin/nfm-llm-router-conformance
+# INVOKE: /usr/local/sbin/nfm-llm-router-conformance   (no arguments)
+#
+# NB on privilege: this wrapper guards llm_router, which is JARVIS'S OWN service, and
+# the collector runs LOCALLY AS ROOT on Jarvis (the monitor-user SSH hop applies to the
+# OTHER nodes, not to Jarvis checking itself). So there is no monitor user here and no
+# sudoers pin is needed - root invokes the root-owned wrapper directly. The wrapper is
+# still deliberately root-owned, 0755, argument-free, and Git-tracked so that IF this
+# check is ever extended to a remote node it drops straight into the standard
+# monitor-user + arg-free-sudoers pattern (pin, with the trailing "" = no args):
+#
+#   monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-llm-router-conformance ""
+# =====================================================================

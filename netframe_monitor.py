@@ -143,6 +143,14 @@ OPENWEBUI_REACH = ("echo -n 'chat.netframe.local (Open WebUI via NPM) HTTP '; "
 # Transact: one real user action. Admission-controlled, fast model only, hourly at most.
 # Emits its own key=value line; SKIPPED when conditions are insufficient (never WARN).
 CONSOLE_TRANSACT = f"/usr/bin/python3 {BASE}/netframe_transact.py console"
+# Narrow conformance for llm_router (NF-AIOPS-004 Phase 3): the root-owned, arg-free
+# wrapper reports config/runtime/firewall as three SEPARATE dimensions. Emits only
+# booleans + non-secret expected/actual tokens; never file contents or secrets. This is
+# Jarvis's OWN service and the collector runs locally as root here (no monitor-user SSH
+# hop, unlike other nodes), so the wrapper is invoked directly. The root-owned 0755
+# wrapper is still the reviewed, Git-tracked, arg-free artifact; being root itself, the
+# collector needs no sudoers pin for it on this host.
+LLM_ROUTER_CONFORMANCE = "/usr/local/sbin/nfm-llm-router-conformance"
 
 # Verdict severity. SKIPPED ranks at 0 alongside OK deliberately: an untested service must
 # never make the estate look unhealthy, so a skip cannot raise the overall verdict. It is
@@ -151,7 +159,7 @@ CONSOLE_TRANSACT = f"/usr/bin/python3 {BASE}/netframe_transact.py console"
 VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2}
 
 NODES = {
-    "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
+    "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU, "llm_router_conformance": LLM_ROUTER_CONFORMANCE}},
     "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
@@ -431,6 +439,18 @@ def parse_llm_router(out):
     return {"http_code": code, "up": code == 200}
 
 
+def parse_llm_router_conformance(out):
+    """Parse the conformance wrapper's key=value lines into a dict. Keeps the three
+    dimensions (config/runtime/firewall) as SEPARATE fields - never collapsed - so the
+    interpreter can say which one failed and therefore what to do about it."""
+    m = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            m[k.strip()] = v.strip()
+    return m
+
+
 def parse_transact(out):
     """Parse netframe_transact.py's key=value line. `reason` may contain spaces, so it is
     taken as the remainder of the line."""
@@ -471,6 +491,7 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "console_auth": parse_page_auth, "llm_router": parse_llm_router,
            "console_backend": parse_llm_router, "report_backend": parse_llm_router,
            "openwebui_reach": parse_llm_router, "console_transact": parse_transact,
+           "llm_router_conformance": parse_llm_router_conformance,
            "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog}
 
 
@@ -527,6 +548,18 @@ def classify(name, rc, out):
         # backend didn't answer (the loopback-bind case); 000 = DNS or NPM itself down.
         m = re.search(r"HTTP\s+(\d{3})", out)
         return "OK" if (m and m.group(1) == "200") else "WARN"
+    if name == "llm_router_conformance":
+        # OK only when ALL three dimensions pass. But the per-dimension verdicts in the
+        # metrics are what the interpreter reads to say WHICH failed (config -> edit the
+        # file; runtime -> restart the unit; firewall -> reassert the lock). A single
+        # collapsed boolean would lose exactly the information that makes this useful.
+        m = parse_llm_router_conformance(out)
+        dims = [m.get("config"), m.get("runtime"), m.get("firewall")]
+        if any(d == "FAIL" for d in dims):
+            return "WARN"
+        if any(d in (None, "UNKNOWN") for d in dims):
+            return "WARN"  # cannot confirm conformance != conformant
+        return "OK"
     if name.endswith("_transact"):
         # SKIPPED is neither health nor failure: it says the functional test could not be
         # run under acceptable conditions. Reporting it as WARN would cry wolf every time
@@ -590,6 +623,14 @@ def flatten_metrics(nodes):
             if name in ("grafana", "prometheus", "loki", "pihole", "llm_router",
                         "console_backend", "report_backend", "openwebui_reach"):
                 flat[f"{host}.{name}.up"] = 1 if m.get("up") else 0
+            if name == "llm_router_conformance":
+                # Keep the three dimensions as separate trend series (1=PASS, 0=not),
+                # so history/predict can show WHICH dimension flapped, not just that
+                # something did.
+                for dim in ("config", "runtime", "firewall"):
+                    v = m.get(dim)
+                    if v in ("PASS", "FAIL"):
+                        flat[f"{host}.llm_router_conformance.{dim}"] = 1 if v == "PASS" else 0
             if name.endswith("_transact"):
                 # Only record the trend when the probe actually ran. Writing 0 for a skip
                 # would make "we didn't test" indistinguishable from "it failed" in the
