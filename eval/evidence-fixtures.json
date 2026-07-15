@@ -1,0 +1,177 @@
+{
+  "_comment": "Acceptance fixtures for evidence-quality scoring (NF-AIOPS-005). Written BEFORE the scorer, as frozen ground truth: these define what the two deterministic numbers MUST be for each real incident, and the module is calibrated until it satisfies them. Each fixture is a 'finding descriptor' - the resolved provenance a finding rests on - plus the expected evidence band, confidence range, and which floors/ceilings must fire. The descriptor shape here IS the scorer's input contract. Principles (owner-approved): two axes never collapse; confidence uses floors/ceilings where determinism/conflict/historical-correction dominate quantity; the score attaches to the recommended ACTION not the observation; every factor carries provenance; freshness is exposed; explanation is mandatory.",
+
+  "_descriptor_schema": {
+    "claim": "the specific conclusion+action being scored (what the confidence is ABOUT)",
+    "sources": "list of {check, kind, agrees, value, age_s, resolved} - resolved=false means the model cited something absent from telemetry (hallucination guard)",
+    "deterministic_condition": "null, or {name, holds} - an explicit fail predicate that settles the question (SMART FAILED, bind mismatch, missing DROP)",
+    "time_coverage": "{covered_days, requested_days} - reuses predict's coverage shortfall",
+    "trend_duration_points": "consecutive persisting points for the signal (0 = single blip)",
+    "known_event": "null, or {id, direction} - direction=supports|contradicts the recommended ACTION",
+    "dependency_confirmed": "bool - is the stated impact graph-derived",
+    "prior_incident_similarity": "null, or {episode, resolution} - signature match to a past history episode"
+  },
+
+  "fixtures": [
+    {
+      "id": "EVT-003-false-replacement",
+      "note": "One SMART attribute on one disk, benign+stable, no FAILED, ledger says benign. The canonical LOW/LOW.",
+      "descriptor": {
+        "claim": "replace /dev/sdc (recommended action)",
+        "sources": [
+          {"check": "quarkylab.smart.worst_pending", "kind": "smart", "agrees": true, "value": 8, "age_s": 300, "resolved": true}
+        ],
+        "deterministic_condition": null,
+        "time_coverage": {"covered_days": 3, "requested_days": 14},
+        "trend_duration_points": 0,
+        "known_event": {"id": "EVT-003", "direction": "contradicts"},
+        "dependency_confirmed": false,
+        "prior_incident_similarity": {"episode": "sdc-pending-benign", "resolution": "no action, stable"}
+      },
+      "expect": {
+        "evidence_band": "LOW",
+        "confidence_max": 35,
+        "must_fire": ["single_source_ceiling", "known_event_contradicts_ceiling", "no_deterministic_condition"],
+        "must_not_fire": ["deterministic_floor"]
+      }
+    },
+    {
+      "id": "EVT-004-observation-indexer-down",
+      "note": "The PROBLEM is well-evidenced: multiple independent paths agree the indexer is down. High confidence in the OBSERVATION.",
+      "descriptor": {
+        "claim": "wazuh-indexer is down (observation)",
+        "sources": [
+          {"check": "wazuh.wazuh", "kind": "ssh", "agrees": true, "value": "core_down", "age_s": 300, "resolved": true},
+          {"check": "monitoring.wazuh_dashboard", "kind": "network", "agrees": true, "value": 503, "age_s": 300, "resolved": true}
+        ],
+        "deterministic_condition": {"name": "wazuh_core_daemon_down", "holds": true},
+        "time_coverage": {"covered_days": 3, "requested_days": 14},
+        "trend_duration_points": 2,
+        "known_event": {"id": "EVT-004", "direction": "supports"},
+        "dependency_confirmed": true,
+        "prior_incident_similarity": {"episode": "wazuh-indexer-death", "resolution": "in-place restart"}
+      },
+      "expect": {
+        "evidence_band": "HIGH",
+        "confidence_min": 80,
+        "must_fire": ["deterministic_floor", "sources_agree"],
+        "must_not_fire": ["conflict_ceiling", "single_source_ceiling"]
+      }
+    },
+    {
+      "id": "EVT-004-action-power-cycle",
+      "note": "SAME incident, but the recommended ACTION is power-cycle, which EVT-004 records as the WRONG answer. Confidence in the action must be low even though the problem is well-evidenced. The action-attachment principle.",
+      "descriptor": {
+        "claim": "power-cycle VM 104 (recommended action)",
+        "sources": [
+          {"check": "wazuh.wazuh", "kind": "ssh", "agrees": true, "value": "core_down", "age_s": 300, "resolved": true},
+          {"check": "monitoring.wazuh_dashboard", "kind": "network", "agrees": true, "value": 503, "age_s": 300, "resolved": true}
+        ],
+        "deterministic_condition": {"name": "wazuh_core_daemon_down", "holds": true},
+        "time_coverage": {"covered_days": 3, "requested_days": 14},
+        "trend_duration_points": 2,
+        "known_event": {"id": "EVT-004", "direction": "contradicts"},
+        "dependency_confirmed": true,
+        "prior_incident_similarity": {"episode": "wazuh-indexer-death", "resolution": "in-place restart NOT power-cycle"}
+      },
+      "expect": {
+        "evidence_band": "HIGH",
+        "confidence_max": 30,
+        "must_fire": ["known_event_contradicts_ceiling"],
+        "note": "evidence stays HIGH (same rich sources); confidence is capped by the contradiction. The two axes diverge - this is the whole point."
+      }
+    },
+    {
+      "id": "llm-router-outage",
+      "note": "Thin evidence, HIGH confidence: a bind mismatch is a FACT. The inverse of EVT-003.",
+      "descriptor": {
+        "claim": "llm_router unreachable off-host; restart the unit (recommended action)",
+        "sources": [
+          {"check": "jarvis.llm_router_conformance", "kind": "conformance", "agrees": true, "value": "runtime=FAIL bind=127.0.0.1:8000", "age_s": 300, "resolved": true},
+          {"check": "monitoring.llm_router", "kind": "network", "agrees": true, "value": 502, "age_s": 300, "resolved": true}
+        ],
+        "deterministic_condition": {"name": "runtime_bind_mismatch", "holds": true},
+        "time_coverage": {"covered_days": 1, "requested_days": 14},
+        "trend_duration_points": 1,
+        "known_event": null,
+        "dependency_confirmed": true,
+        "prior_incident_similarity": {"episode": "2026-07-14-loopback-bind", "resolution": "restore 0.0.0.0 + restart"}
+      },
+      "expect": {
+        "evidence_band": "MEDIUM",
+        "confidence_min": 85,
+        "must_fire": ["deterministic_floor", "sources_agree"],
+        "must_not_fire": ["single_source_ceiling", "conflict_ceiling"]
+      }
+    },
+    {
+      "id": "conflicting-evidence",
+      "note": "Rich evidence, but sources disagree -> HIGH evidence, capped confidence. The row a single health score cannot express.",
+      "descriptor": {
+        "claim": "randy storage is degrading (recommended: investigate)",
+        "sources": [
+          {"check": "randy.smart.worst_realloc", "kind": "smart", "agrees": true, "value": 40, "age_s": 300, "resolved": true},
+          {"check": "randy.zpool", "kind": "ssh", "agrees": false, "value": "ONLINE no errors", "age_s": 300, "resolved": true},
+          {"check": "randy.scrutiny", "kind": "network", "agrees": false, "value": "passed", "age_s": 600, "resolved": true}
+        ],
+        "deterministic_condition": null,
+        "time_coverage": {"covered_days": 3, "requested_days": 14},
+        "trend_duration_points": 5,
+        "known_event": null,
+        "dependency_confirmed": true,
+        "prior_incident_similarity": null
+      },
+      "expect": {
+        "evidence_band": "HIGH",
+        "confidence_max": 50,
+        "must_fire": ["conflict_ceiling"],
+        "note": "3 sources = high evidence; 2 of 3 disagree with the degradation claim = 50% ceiling. Investigate is still a safe rec, but the operator sees the disagreement."
+      }
+    },
+    {
+      "id": "missing-telemetry-hallucination",
+      "note": "The model cites a source that is NOT in telemetry (resolved=false). It contributes zero; the finding collapses to single-real-source with a flag. Handles both missing-telemetry AND hallucination.",
+      "descriptor": {
+        "claim": "replace the failing NVMe on pve4 (recommended action)",
+        "sources": [
+          {"check": "pve4.smart.nvme_media_errors", "kind": "smart", "agrees": true, "value": "cited-but-absent", "age_s": null, "resolved": false},
+          {"check": "pve4.df.max_use_pct", "kind": "ssh", "agrees": true, "value": 55, "age_s": 300, "resolved": true}
+        ],
+        "deterministic_condition": null,
+        "time_coverage": {"covered_days": 3, "requested_days": 14},
+        "trend_duration_points": 0,
+        "known_event": null,
+        "dependency_confirmed": false,
+        "prior_incident_similarity": null
+      },
+      "expect": {
+        "evidence_band": "LOW",
+        "confidence_max": 30,
+        "must_fire": ["unverifiable_citation_ceiling", "single_source_ceiling"],
+        "note": "the NVMe source does not resolve -> zero contribution + flag; only the (irrelevant) df source is real -> single-source ceiling. A drive-replacement claim built on an absent source scores LOW/low automatically."
+      }
+    },
+    {
+      "id": "stale-data",
+      "note": "A real, agreeing, deterministic-looking source, but the telemetry is stale. Staleness ceiling applies and is exposed (freshness requirement).",
+      "descriptor": {
+        "claim": "pve3 disk filling; schedule cleanup (recommended action)",
+        "sources": [
+          {"check": "pve3.df.max_use_pct", "kind": "ssh", "agrees": true, "value": 88, "age_s": 172800, "resolved": true}
+        ],
+        "deterministic_condition": null,
+        "time_coverage": {"covered_days": 3, "requested_days": 14},
+        "trend_duration_points": 4,
+        "known_event": null,
+        "dependency_confirmed": false,
+        "prior_incident_similarity": null
+      },
+      "expect": {
+        "evidence_band": "LOW",
+        "confidence_max": 40,
+        "must_fire": ["staleness_ceiling", "single_source_ceiling"],
+        "note": "age_s = 48h is well past freshness. The number may once have been right; stale data cannot yield confidence, and the explanation must say 'telemetry 48h old'."
+      }
+    }
+  ]
+}
