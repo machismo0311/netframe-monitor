@@ -1,0 +1,10 @@
+[Unit]
+Description=NetFRAME config-drift timer (daily ~07:10)
+
+[Timer]
+OnCalendar=*-*-* 07:10:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

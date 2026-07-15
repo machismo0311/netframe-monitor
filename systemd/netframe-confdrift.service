@@ -1,0 +1,13 @@
+[Unit]
+Description=NetFRAME config-drift check (interfaces/ssh/sysctl fingerprints vs approved baseline)
+Documentation=file:/opt/netframe-monitor/netframe_confdrift.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Nice=15
+ExecStart=/usr/bin/python3 /opt/netframe-monitor/netframe_confdrift.py check
+TimeoutStartSec=300
