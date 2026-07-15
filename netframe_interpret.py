@@ -26,7 +26,7 @@ REPORT_FILE = f"{BASE}/report.md"
 REPORT_DIR = f"{BASE}/reports"
 REPORT_KEEP = 96  # ~24h of archives at 15-min cadence
 CONTEXT_DIR = f"{BASE}/context"   # optional standing context (*.md), e.g. pentest tracker
-CONTEXT_CAP = 6000                # max chars of context fed to the model
+CONTEXT_CAP = 16000               # max chars of standing operational context fed to the model
 WEB_DIR = f"{BASE}/web"           # served over HTTP (never contains the key)
 WEB_FILE = f"{WEB_DIR}/index.html"
 WEB_REFRESH = 120                 # <meta refresh> seconds
@@ -55,10 +55,15 @@ SYSTEM_PROMPT = (
     "- Recommendations: prioritized, most important first, concrete and actionable. "
     "If all nominal, say so and recommend nothing.\n"
     "- Security: auth failures, unexpected service failures, or posture notes from the "
-    "telemetry. If a STANDING SECURITY CONTEXT (pentest remediation tracker) is provided "
-    "below, cross-reference it: call out telemetry that relates to an OPEN/Partial/Pending "
-    "finding, and do not re-flag findings already marked Resolved or Risk-Accepted. If "
-    "nothing is relevant, say 'Nothing security-relevant in this telemetry.'\n\n"
+    "telemetry. Cross-reference the STANDING OPERATIONAL CONTEXT below: call out telemetry "
+    "that relates to an OPEN/Partial/Pending finding, and do not re-flag findings already "
+    "marked Resolved or Risk-Accepted. If nothing is relevant, say 'Nothing security-relevant "
+    "in this telemetry.'\n\n"
+    "Use the STANDING OPERATIONAL CONTEXT (architecture, reliability/SPOFs, known issues and "
+    "recent changes, security tracker) across ALL sections: it tells you which nodes are "
+    "which, what is a KNOWN single point of failure or accepted risk (do not raise those as "
+    "novel), and what changed recently (so you can attribute a new symptom to a recent change "
+    "rather than guessing). Prefer explaining WHY something matters over restating the metric.\n\n"
     "Rules: be specific; reference node names and numbers. Do NOT invent problems. The "
     "following are NORMAL and must NOT be reported as faults:\n"
     "  * Proxmox pmxcfs corosync messages at boot (quorum_initialize / cmap_initialize / "
@@ -168,8 +173,9 @@ def call_llm(context, standing_context):
     user = "Here is the latest cluster telemetry as JSON. Write the report.\n\n" \
         + json.dumps(context, indent=2)
     if standing_context:
-        user += ("\n\n=== STANDING SECURITY CONTEXT (pentest remediation tracker; "
-                 "use for the Security section) ===\n" + standing_context)
+        user += ("\n\n=== STANDING OPERATIONAL CONTEXT (architecture, reliability/SPOFs, "
+                 "known issues + recent changes, security tracker; use across ALL sections) "
+                 "===\n" + standing_context)
     payload = {
         "model": MODEL,
         "stream": False,
@@ -231,8 +237,7 @@ def markdown_to_html(md):
     out, in_ul = [], False
     for line in md.splitlines():
         if in_ul and not line.lstrip().startswith("- "):
-            out.append("</ul>")
-            in_ul = False
+            out.append("</ul>"); in_ul = False
         s = line.strip()
         if s == "---":
             out.append("<hr>")
@@ -242,8 +247,7 @@ def markdown_to_html(md):
             out.append(f"<h1>{_md_inline(s[2:])}</h1>")
         elif s.startswith("- "):
             if not in_ul:
-                out.append("<ul>")
-                in_ul = True
+                out.append("<ul>"); in_ul = True
             out.append(f"<li>{_md_inline(s[2:])}</li>")
         elif s.startswith("_") and s.endswith("_") and len(s) > 1:
             out.append(f'<p class="muted">{_md_inline(s.strip("_"))}</p>')
