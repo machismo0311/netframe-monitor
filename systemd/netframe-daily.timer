@@ -1,0 +1,10 @@
+[Unit]
+Description=NetFRAME daily rollup timer (once daily, ~07:05 local)
+
+[Timer]
+OnCalendar=*-*-* 07:05:00
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target
