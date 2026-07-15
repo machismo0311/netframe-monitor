@@ -263,3 +263,7 @@ def test_monthly_carries_shared_evidence_section():
 
 def test_chief_carries_shared_evidence_section():
     _run_evidence("netframe_chief", "narrate", "report-chief.md")
+
+
+def test_predict_carries_shared_evidence_section():
+    _run_evidence("netframe_predict", "narrate", "report-predict.md")
