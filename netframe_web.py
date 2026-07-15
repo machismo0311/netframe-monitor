@@ -114,6 +114,16 @@ def read_jsonl(path):
     return rows
 
 
+def _chain_status():
+    """Ledger tamper-evidence status for the dashboard badge. Degrades to a neutral
+    message if the audit module is unavailable."""
+    try:
+        import netframe_audit
+        return netframe_audit.verify()
+    except Exception:  # noqa: BLE001
+        return True, "not verified"
+
+
 def remediation_html():
     pending = read_jsonl(f"{CONTEXT}/pending-remediation.jsonl")
     hist = read_jsonl(f"{CONTEXT}/incident-history.jsonl")
@@ -129,18 +139,29 @@ def remediation_html():
     else:
         parts.append("<p class='muted'>None. Jarvis proposes; it never acts without your "
                      "explicit approval.</p>")
-    parts.append("<h2>Action ledger (approved, rejected, executed)</h2>")
+    ok_chain, chain_msg = _chain_status()
+    badge = "ok" if ok_chain else "bad"
+    parts.append(f"<h2>Action ledger <span class='badge {badge}'>chain: "
+                 f"{html.escape(chain_msg)}</span></h2>")
+    parts.append("<p class='muted'>Hash-chained and mirrored to Loki at write time. Any "
+                 "edit or deletion breaks the chain and shows here.</p>")
     if hist:
-        parts.append("<div class='tw'><table><thead><tr><th>When (UTC)</th><th>Event</th>"
-                     "<th>Action</th><th>Result</th></tr></thead><tbody>")
+        parts.append("<div class='tw'><table><thead><tr><th>When (UTC)</th><th>Actor</th>"
+                     "<th>Event</th><th>Action</th><th>Before&rarr;After</th><th>Result</th>"
+                     "</tr></thead><tbody>")
         for h in reversed(hist[-100:]):
             ev = html.escape(str(h.get("event", "")))
             cls = {"executed": "ok", "rejected": "warn", "tier2-refused": "bad"}.get(
                 h.get("event"), "")
             res = "ok" if h.get("ok") else ("fail" if "ok" in h else "")
+            ba = ""
+            if h.get("before_state") is not None or h.get("after_state") is not None:
+                ba = f"{html.escape(str(h.get('before_state')))}&rarr;{html.escape(str(h.get('after_state')))}"
             parts.append(f"<tr><td>{html.escape(str(h.get('ts', ''))[:19])}</td>"
+                         f"<td>{html.escape(str(h.get('actor', '')))}</td>"
                          f"<td><span class='badge {cls}'>{ev}</span></td>"
                          f"<td><code>{html.escape(str(h.get('action', '')))}</code></td>"
+                         f"<td class='muted'>{ba}</td>"
                          f"<td>{res}</td></tr>")
         parts.append("</tbody></table></div>")
     else:

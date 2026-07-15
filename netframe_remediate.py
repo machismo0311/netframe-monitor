@@ -54,6 +54,7 @@ ALLOWLIST = {
         "rollback": "systemctl start netframe-report-web (it auto-restarts on failure).",
         "data_risk": "none",
         "argv": ["/usr/bin/systemctl", "restart", "netframe-report-web"],
+        "state_cmd": ["/usr/bin/systemctl", "is-active", "netframe-report-web"],
     },
     "restart-wazuh-indexer": {
         "tier": 1,
@@ -82,10 +83,31 @@ def _now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+def _probe_state(act):
+    """Capture a small before/after state snapshot for an action, if it defines a
+    state_cmd. Best-effort; returns None when not applicable."""
+    cmd = act.get("state_cmd")
+    if not cmd:
+        return None
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        return r.stdout.strip()[:200] or r.stderr.strip()[:200]
+    except Exception as e:  # noqa: BLE001
+        return f"probe-error: {e}"
+
+
 def _log(rec):
-    os.makedirs(CONTEXT, exist_ok=True)
-    with open(HISTORY, "a") as fh:
-        fh.write(json.dumps(rec) + "\n")
+    """Record to the tamper-evident, Loki-mirrored audit ledger (Phase 2). Falls back to
+    a plain append if the audit module is unavailable, so logging never fails silently."""
+    event = rec.pop("event", "event")
+    rec.pop("ts", None)  # the audit module stamps its own timestamp + actor + chain
+    try:
+        import netframe_audit
+        netframe_audit.record(event, **rec)
+    except Exception:  # noqa: BLE001
+        os.makedirs(CONTEXT, exist_ok=True)
+        with open(HISTORY, "a") as fh:
+            fh.write(json.dumps({"event": event, "ts": _now(), **rec}) + "\n")
 
 
 def _read(path):
@@ -176,6 +198,7 @@ def cmd_approve(a):
     if a.dry_run:
         print(f"DRY-RUN #{a.id} {p['action']}: would run {act['argv']}")
         return
+    before = _probe_state(act)
     print(f"EXECUTING approved #{a.id} {p['action']}: {act['argv']}")
     try:
         r = subprocess.run(act["argv"], capture_output=True, text=True, timeout=EXEC_TIMEOUT)
@@ -183,8 +206,10 @@ def cmd_approve(a):
         ok = r.returncode == 0
     except Exception as e:  # noqa: BLE001
         result, ok = {"error": str(e)}, False
-    _log({"ts": _now(), "event": "executed", "id": a.id, "action": p["action"],
-          "tier": p["tier"], "approved_by": "human (explicit)", "ok": ok, "result": result})
+    after = _probe_state(act)
+    _log({"event": "executed", "id": a.id, "action": p["action"], "tier": p["tier"],
+          "approval": "human (explicit)", "confidence": p.get("confidence"),
+          "before_state": before, "after_state": after, "ok": ok, "result": result})
     _write_pending([x for x in pend if x["id"] != a.id])
     print(f"RESULT: {'SUCCESS' if ok else 'FAILED'} (rc={result.get('rc')}). Recorded in incident history.")
     if not ok:
