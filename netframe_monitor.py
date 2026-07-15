@@ -125,6 +125,30 @@ CONSOLE_AUTHGUARD = ("echo -n 'console.kylemason.org (auth-gated) HTTP '; "
 LLM_ROUTER = ("echo -n 'llm.netframe.local (llm_router via NPM) HTTP '; "
               "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
               "http://llm.netframe.local/v1/models")
+# --- User-journey tiers (NF-AIOPS-004 Phase 2) -------------------------------------
+# The auth guards above are AUTHENTICATE probes, not REACH probes, and the distinction is
+# not academic: NPM applies auth_basic in nginx's access phase, before proxy_pass in the
+# content phase, so an un-credentialed request returns 401 without the upstream ever being
+# contacted. page_auth/console_auth therefore stay green with a dead backend. These probes
+# close that gap by proving the backend actually serves.
+CONSOLE_BACKEND = ("echo -n 'console backend api/overview HTTP '; "
+                   "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
+                   "http://127.0.0.1:8809/api/overview")
+REPORT_BACKEND = ("echo -n 'report page backend HTTP '; "
+                  "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
+                  "http://127.0.0.1:8808/")
+OPENWEBUI_REACH = ("echo -n 'chat.netframe.local (Open WebUI via NPM) HTTP '; "
+                   "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
+                   "http://chat.netframe.local/")
+# Transact: one real user action. Admission-controlled, fast model only, hourly at most.
+# Emits its own key=value line; SKIPPED when conditions are insufficient (never WARN).
+CONSOLE_TRANSACT = f"/usr/bin/python3 {BASE}/netframe_transact.py console"
+
+# Verdict severity. SKIPPED ranks at 0 alongside OK deliberately: an untested service must
+# never make the estate look unhealthy, so a skip cannot raise the overall verdict. It is
+# surfaced separately as "NOT TESTED" rather than folded in, so it also cannot be mistaken
+# for a passing test. Module-level so the ordering is testable rather than buried in main().
+VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2}
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
@@ -137,7 +161,7 @@ NODES = {
     # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
     "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
-    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "llm_router": LLM_ROUTER, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "llm_router": LLM_ROUTER, "console_backend": CONSOLE_BACKEND, "report_backend": REPORT_BACKEND, "openwebui_reach": OPENWEBUI_REACH, "console_transact": CONSOLE_TRANSACT, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
 }
 
 SSH_OPTS = [
@@ -407,6 +431,25 @@ def parse_llm_router(out):
     return {"http_code": code, "up": code == 200}
 
 
+def parse_transact(out):
+    """Parse netframe_transact.py's key=value line. `reason` may contain spaces, so it is
+    taken as the remainder of the line."""
+    m = re.search(r"reason=(.*)$", out.strip(), re.MULTILINE)
+    reason = m.group(1).strip() if m else None
+    kv = dict(re.findall(r"(\w+)=(\S+)", out))
+    attempted = kv.get("attempted") == "YES"
+    return {"attempted": attempted,
+            "reason": None if attempted else reason,
+            "result": kv.get("result"),
+            "http_code": int(kv["http"]) if kv.get("http", "").isdigit() else None,
+            "model": kv.get("model"),
+            "elapsed_s": int(kv["elapsed_s"]) if kv.get("elapsed_s", "").isdigit() else None,
+            # Tri-state, deliberately not a bool: True = verified working, False = verified
+            # broken, None = NOT TESTED. Collapsing None into False would turn "we did not
+            # look" into "it is broken", which is the failure this whole phase exists to end.
+            "functionally_verified": (kv.get("result") == "PASS") if attempted else None}
+
+
 def parse_wazuh(out):
     status = {}
     for line in out.splitlines():
@@ -426,6 +469,8 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
            "wazuh": parse_wazuh, "page_auth": parse_page_auth,
            "console_auth": parse_page_auth, "llm_router": parse_llm_router,
+           "console_backend": parse_llm_router, "report_backend": parse_llm_router,
+           "openwebui_reach": parse_llm_router, "console_transact": parse_transact,
            "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog}
 
 
@@ -477,12 +522,20 @@ def classify(name, rc, out):
         # 401 = NPM auth enforced (healthy). 200 = access list detached (public!).
         m = re.search(r"HTTP\s+(\d{3})", out)
         return "OK" if (m and m.group(1) == "401") else "WARN"
-    if name == "llm_router":
-        # 200 = reachable over its real network path. 502 = NPM can't reach the
-        # backend (bind regressed to loopback, or the service is down); 000 = DNS
-        # or NPM itself is unreachable.
+    if name in ("llm_router", "console_backend", "report_backend", "openwebui_reach"):
+        # 200 = the thing actually serves. For llm_router, 502 = NPM reached but the
+        # backend didn't answer (the loopback-bind case); 000 = DNS or NPM itself down.
         m = re.search(r"HTTP\s+(\d{3})", out)
         return "OK" if (m and m.group(1) == "200") else "WARN"
+    if name.endswith("_transact"):
+        # SKIPPED is neither health nor failure: it says the functional test could not be
+        # run under acceptable conditions. Reporting it as WARN would cry wolf every time
+        # someone actually used the GPU; reporting it as OK would claim a verification we
+        # never performed. It gets its own verdict and does not move the overall one.
+        data = parse_transact(out)
+        if not data["attempted"]:
+            return "SKIPPED"
+        return "OK" if data["result"] == "PASS" else "WARN"
     if name == "wazuh":
         # `wazuh-control status` exits non-zero if ANY daemon (incl. optional ones
         # that are down by design) isn't running, so rc is not a health signal.
@@ -534,8 +587,15 @@ def flatten_metrics(nodes):
             if name == "guests":
                 flat[f"{host}.guests.running"] = m.get("running")
                 flat[f"{host}.guests.stopped"] = m.get("stopped")
-            if name in ("grafana", "prometheus", "loki", "pihole", "llm_router"):
+            if name in ("grafana", "prometheus", "loki", "pihole", "llm_router",
+                        "console_backend", "report_backend", "openwebui_reach"):
                 flat[f"{host}.{name}.up"] = 1 if m.get("up") else 0
+            if name.endswith("_transact"):
+                # Only record the trend when the probe actually ran. Writing 0 for a skip
+                # would make "we didn't test" indistinguishable from "it failed" in the
+                # history, and every trend built on it would be wrong.
+                if m.get("functionally_verified") is not None:
+                    flat[f"{host}.{name}.verified"] = 1 if m["functionally_verified"] else 0
             if name == "wazuh":
                 flat[f"{host}.wazuh.up"] = 1 if m.get("up") else 0
                 flat[f"{host}.wazuh.running"] = m.get("running")
@@ -566,7 +626,7 @@ def main():
     started = datetime.now(timezone.utc)
     report = {"started": started.isoformat(), "runner": socket.gethostname(), "nodes": {}}
     worst = "OK"
-    rank = {"OK": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2}
+    rank = VERDICT_RANK
 
     print(f"=== NetFRAME cluster health monitor — {started.isoformat()} ===")
     for host, cfg in NODES.items():
