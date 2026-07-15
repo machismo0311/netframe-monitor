@@ -1,0 +1,13 @@
+[Unit]
+Description=NetFRAME operational-memory backup (restic to Randy, JAR-01)
+Documentation=file:/opt/netframe-monitor/netframe-backup.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Nice=19
+ExecStart=/usr/bin/bash /opt/netframe-monitor/netframe-backup.sh
+TimeoutStartSec=900

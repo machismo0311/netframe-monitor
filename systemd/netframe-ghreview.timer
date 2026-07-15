@@ -1,0 +1,10 @@
+[Unit]
+Description=NetFRAME weekly GitHub Engineering Review timer (Sun ~07:45)
+
+[Timer]
+OnCalendar=Sun 07:45:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
