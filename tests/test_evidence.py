@@ -153,3 +153,27 @@ def test_descriptor_no_false_deterministic_on_benign_pending():
     assert d["deterministic_condition"] is None
     a = ev.score(d)
     assert a["confidence"] <= 45  # single source, no deterministic condition
+
+
+# ---- console: strip model confidence, append code-computed section ----
+
+def test_strip_model_confidence_removes_section_and_inline():
+    section = ("## Summary\nStable.\n## Confidence\n95% - reports agree.\n"
+               "## Recommendation\nMonitor sdc.")
+    out = ev.strip_model_confidence(section)
+    assert "## Confidence" not in out and "95%" not in out
+    assert "Stable." in out and "Monitor sdc." in out
+    inline = "Randy is fine.\nConfidence: 80%\nDone."
+    assert "80%" not in ev.strip_model_confidence(inline)
+
+
+def test_strip_model_confidence_preserves_normal_prose():
+    # Must not eat legitimate uses of the word in other contexts.
+    txt = "## Analysis\nThe evidence gives high confidence in the diagnosis overall.\n"
+    out = ev.strip_model_confidence(txt)
+    assert "high confidence in the diagnosis" in out  # inline mid-sentence use survives
+
+
+def test_strip_model_confidence_handles_empty():
+    assert ev.strip_model_confidence("") == ""
+    assert ev.strip_model_confidence(None) is None

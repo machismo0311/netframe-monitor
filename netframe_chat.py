@@ -13,8 +13,12 @@ import argparse
 import datetime as dt
 import json
 import os
+import sys
 import time
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netframe_evidence  # noqa: E402 - path first; shared evidence engine
 
 BASE = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
 OLLAMA = os.environ.get("NETFRAME_OLLAMA_URL", "http://localhost:11434").rstrip("/")
@@ -38,9 +42,12 @@ MODE_GUIDE = {
 
 FORMAT = (
     "For any significant answer use EXACTLY these headers: ## Summary, ## Current status, "
-    "## Evidence, ## Analysis, ## Confidence, ## Recommendation, ## Required approval. "
-    "Under Evidence, cite the specific sources you used (name the file/EVT/metric). Under "
-    "Confidence give a percentage and one clause of why. Under Recommendation be concrete. "
+    "## Evidence, ## Analysis, ## Recommendation, ## Required approval. "
+    "Under Evidence, cite the specific sources you used (name the file/EVT/metric). DO NOT "
+    "state a confidence level or percentage anywhere: evidence quality and confidence are "
+    "computed deterministically by code and appended after your text; a confidence you "
+    "write would be your own opinion of your correctness and is not wanted. Under "
+    "Recommendation be concrete. "
     "Under Required approval: you are READ-ONLY and never execute. NEVER write a shell "
     "command yourself. The only three automatable actions are rerun-health-check "
     "(re-run the read-only sweep), restart-report-web (restart Jarvis's health web page), "
@@ -124,6 +131,12 @@ def answer(question, mode="operator", deep=False):
     except Exception as e:  # noqa: BLE001
         reply = f"## Summary\nI could not reach the local model ({e}). Live state:\n\n{live_state()}"
     reply = _guard_actions(reply)
+    # Evidence + confidence are code's job, not the model's (NF-AIOPS-005). Strip any
+    # confidence the model wrote out of habit, then append the SAME shared deterministic
+    # section the report paths use, so the console's confidence is computed from telemetry
+    # provenance rather than self-rated. Same single engine, no console-specific logic.
+    reply = netframe_evidence.strip_model_confidence(reply)
+    reply += netframe_evidence.section_for_current_state(BASE)
     # Same deterministic screen as the interpreter. _guard_actions only sanitises action
     # TAGS; it does nothing about prose that recommends a prohibited action in words, and
     # the console is just as user-visible as the report. Evidence is read from live state
