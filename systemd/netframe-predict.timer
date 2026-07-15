@@ -1,0 +1,10 @@
+[Unit]
+Description=NetFRAME predictive report timer (weekly, Sun ~07:20)
+
+[Timer]
+OnCalendar=Sun *-*-* 07:20:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
