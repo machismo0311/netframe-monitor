@@ -714,3 +714,55 @@ def test_pol002_narrowed_blocks_actionable_allows_planning():
                  "The pools use aged disks; budget for end-of-life replacement next year."]:
         r = pol.screen(line, evidence=ev, audit=False)
         assert r["clean"], f"planning/conditional advice WRONGLY blocked: {line}"
+
+
+# ---- AI surface inventory: the coverage ledger must match the source ----
+
+def _inventory():
+    with open(os.path.join(BASE, "knowledge", "ai-surfaces.json")) as fh:
+        return json.load(fh)
+
+
+def test_inventory_matches_source_for_this_repo():
+    """A row cannot claim coverage the code does not have, and a module cannot exist
+    outside the inventory. Inventory rot is how a boundary quietly stops being one."""
+    import glob
+    inv = {s["component"].split(" ")[0]: s for s in _inventory()["surfaces"]
+           if s["repo"] == "netframe-monitor"}
+    for path in glob.glob(os.path.join(BASE, "netframe_*.py")):
+        mod = os.path.basename(path)[:-3]
+        src = open(path).read()
+        calls_llm = "OLLAMA_URL" in src and "api/embeddings" not in src
+        generates = calls_llm and "netframe_policy.enforce(" in src
+        if mod in ("netframe_policy", "netframe_audit", "netframe_knowledge",
+                   "netframe_monitor", "netframe_admission", "netframe_confdrift",
+                   "netframe_memory", "netframe_eval", "netframe_backup"):
+            continue  # engine/collector/plumbing: no LLM prose to an operator
+        assert mod in inv, f"{mod} is missing from the AI surface inventory"
+        row = inv[mod]
+        if calls_llm:
+            assert row["calls_llm"] is True, f"{mod}: inventory says no LLM, source says yes"
+            if row["coverage"] == "gated":
+                assert generates, (f"{mod}: inventory claims 'gated' but source has no "
+                                   "netframe_policy.enforce() call")
+        if row["coverage"] == "transport":
+            assert "netframe_policy.enforce(" not in src or mod == "netframe_chat", \
+                f"{mod}: claims transport but enforces directly"
+
+
+def test_inventory_has_no_ungated_surfaces():
+    """UNGATED is a defect by definition. out-of-boundary is allowed only with a recorded
+    decision (the enforcement_point must say why)."""
+    for s in _inventory()["surfaces"]:
+        assert s["coverage"].lower() != "ungated", \
+            f"UNGATED surface in inventory: {s['component']}"
+        if s["coverage"] == "out-of-boundary":
+            assert len(s["enforcement_point"]) > 60, \
+                f"{s['component']}: out-of-boundary needs a recorded WHY, not a shrug"
+
+
+def test_inventory_execution_surfaces_are_gated():
+    for s in _inventory()["surfaces"]:
+        if s["can_execute"]:
+            assert s["coverage"] in ("gated", "gated-execution"), \
+                f"{s['component']} can execute but is not gated"
