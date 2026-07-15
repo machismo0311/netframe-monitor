@@ -1,4 +1,4 @@
-# NetFRAME AI-Ops Hardening — Comprehensive Build Report
+# NetFRAME AI-Ops Hardening - Comprehensive Build Report
 
 **Date:** 2026-07-15
 **Author:** Kyle Mason (masonkr@gmail.com)
@@ -19,7 +19,7 @@ surfaced a chain of latent defects, each of which led to the next. Fixing them t
 a deliberate program with a single thesis:
 
 > **The model proposes and phrases. Code decides what is allowed, how well-supported it is,
-> and how sure we are.**
+> and how much confidence it warrants.**
 
 By the end, every LLM-generated path to an operator passes through one deterministic policy
 boundary and one deterministic evidence-scoring engine; the model no longer executes unsafe
@@ -44,7 +44,7 @@ tests before they shipped.
 6. A health check revealed the **llm_router loopback-bind outage** (Open WebUI dead for a day).
 7. That outage motivated **NF-AIOPS-004: configuration correctness** (Phases 1–3).
 8. A flaky eval during Phase 2 exposed that **production did not enforce what evaluation
-   asserted** — the model recommended prohibited actions ~1 run in 5, unscreened.
+   asserted** - the model recommended prohibited actions ~1 run in 5, unscreened.
 9. That became the **safety boundary**: a deterministic policy screen, made universal
    across every path, extended to the **Discord bot**.
 10. The safety work needed a trustworthy **CI merge gate** and an **AI surface inventory**.
@@ -61,7 +61,7 @@ Every problem encountered, what caused it, and how it was fixed.
 |---|---|---|---|---|
 | I-1 | Console reachable only by raw IP | No NPM proxy host / DNS for `console.kylemason.org` | NPM host id 8 → Jarvis:8809, LE cert (CF DNS-01), Basic auth, 200s proxy timeout for deep-model queries | Home-Lab #10 |
 | I-2 | **vault/grafana/wazuh unresolvable LAN-wide** | Only `homepage`/`health` had Pi-hole local records; the rest were rebind-stripped for every Pi-hole client | Added the 4 missing local DNS records via password-free `pct exec` on the primary Pi-hole; nebula-sync to secondary | Home-Lab #10 |
-| I-3 | `bw` (Bitwarden CLI) silently stopped syncing | It couldn't resolve `vault.kylemason.org` (same gap as I-2) — a DR trap: the vault is unreachable exactly when you need it | Fixed by I-2; documented the deadlock and the password-free break | Home-Lab #10 |
+| I-3 | `bw` (Bitwarden CLI) silently stopped syncing | It couldn't resolve `vault.kylemason.org` (same gap as I-2) - a DR trap: the vault is unreachable exactly when you need it | Fixed by I-2; documented the deadlock and the password-free break | Home-Lab #10 |
 | I-4 | Console backend could go public unnoticed | NPM applies `auth_basic` in the access phase before `proxy_pass`; a detached access list = public console, no alarm | `console_auth` self-guard (401 = OK, 200 = WARN), separate from `page_auth` | #31 |
 | I-5 | **Docs-only PRs stuck BLOCKED** | `ci.yml` supplied both required checks but was path-filtered to `scripts/**`; a docs PR triggered zero checks, and a required check that never runs stays pending forever | Dropped the path filter from `ci.yml`; kept it on the expensive non-required workflows | Home-Lab #11, #12 |
 | I-6 | NPM admin password existed only in the owner's head | Never filed; no `INITIAL_ADMIN_PASSWORD` in compose | Filed in Vaultwarden, round-trip-verified against the NPM API | (Vaultwarden) |
@@ -69,7 +69,7 @@ Every problem encountered, what caused it, and how it was fixed.
 | I-8 | **Open WebUI chat dead for a day** | `llm_router` bind regressed `0.0.0.0`→`127.0.0.1` (live env drifted from the repo's documented value). Service stayed "active", localhost answered 200, so nothing alerted; but Open WebUI is on another host | Restored `0.0.0.0`; added an iptables allowlist on :8000 (no auth of its own); ordered lock before the service at boot | Home-Lab #13 |
 | I-9 | Monitoring never noticed I-8 | The monitor had zero checks over `llm_router`, and a localhost probe would have read 200 throughout | `llm_router` check probing **through NPM** (the real consumer path), not localhost | #32 |
 | I-10 | **Model recommended prohibited actions, unscreened** | The eval gated on prohibited substrings; nothing on the live path did. ~1 run in 5 the 7B recommended power-cycle (EVT-004) or replacing a healthy drive (EVT-003), reaching the operator | Deterministic prohibited-recommendation screen on the live path; made universal; extended to Discord | #35, #36, #37, Home-Lab #14 |
-| I-11 | Config-drift detector couldn't express intent | It compared production to a *blessed snapshot of production*, not to Git — so it would have blessed the I-8 broken value as correct | Re-scoped drift to conformance against declared intent (NF-AIOPS-004 proposal); Phase 3 conformance wrapper | #40 |
+| I-11 | Config-drift detector couldn't express intent | It compared production to a *blessed snapshot of production*, not to Git - so it would have blessed the I-8 broken value as correct | Re-scoped drift to conformance against declared intent (NF-AIOPS-004 proposal); Phase 3 conformance wrapper | #40 |
 | I-12 | PR merged on "no checks reported" | The old wait-loop treated absence of checks as completion (PR #37 merged before CI reported) | CI merge gate: no checks = UNKNOWN, UNKNOWN cannot merge, explicit named PASS required, decision recorded as a PR comment | #39 |
 | I-13 | Model graded its own confidence | The Findings contract literally asked the model for "Confidence: a percentage" | Removed it; confidence computed deterministically from provenance (NF-AIOPS-005) | #41, #42 |
 
@@ -82,21 +82,21 @@ human could otherwise cross silently.
 
 ### 4.1 Network / service guardrails
 - **`netframe-console-lock`** (pre-existing, verified): iptables restricts :8809 to NPM + localhost.
-- **`llm-router-lock`** (Home-Lab #13): iptables allowlist on :8000 — localhost, Open WebUI, both NPM legs; default DROP. Ordered `Before=llm_router.service` so :8000 is never briefly open at boot. Fails closed.
-- **`nfm-llm-router-conformance`** (#40): root-owned, arg-free wrapper reporting **config / runtime / firewall as three separate dimensions**, emitting only booleans + non-secret tokens — never file contents or secrets.
+- **`llm-router-lock`** (Home-Lab #13): iptables allowlist on :8000 - localhost, Open WebUI, both NPM legs; default DROP. Ordered `Before=llm_router.service` so :8000 is never briefly open at boot. Fails closed.
+- **`nfm-llm-router-conformance`** (#40): root-owned, arg-free wrapper reporting **config / runtime / firewall as three separate dimensions**, emitting only booleans + non-secret tokens - never file contents or secrets.
 
 ### 4.2 Monitoring self-guards
 - **`console_auth`** (#31) and the existing **`page_auth`**: WARN if an NPM access list detaches (page/console goes public).
-- **`llm_router`** (#32): probes through NPM, never localhost — a localhost probe reads healthy through exactly the I-8 failure.
+- **`llm_router`** (#32): probes through NPM, never localhost - a localhost probe reads healthy through exactly the I-8 failure.
 - **User-journey probes** (#34): reach / authenticate / **transact** tiers. Auth probes were being read as reach probes; a 401 proves the gate, not the backend. Added backend-reach probes (`console_backend`, `report_backend`, `openwebui_reach`).
 
 ### 4.3 The policy boundary (the big one)
-- **`netframe_policy.enforce()`** — ONE deterministic engine, 9 rules:
+- **`netframe_policy.enforce()`** - ONE deterministic engine, 9 rules:
 
 | Rule | Blocks |
 |---|---|
 | POL-001 | power-cycle / hard reset (EVT-004) |
-| POL-002 | drive replacement without evidence — *narrowed* to unsupported **immediate** replacement (EVT-003) |
+| POL-002 | drive replacement without evidence - *narrowed* to unsupported **immediate** replacement (EVT-003) |
 | POL-003 | destructive storage (zpool destroy, fsck, dd, mkfs, rm -rf) |
 | POL-004 | firewall changes |
 | POL-005 | DNS changes |
@@ -118,14 +118,14 @@ human could otherwise cross silently.
 - **AI surface inventory** (#39, #48): every LLM-touching component with policy + evidence coverage status, cross-checked against source so a row can't claim coverage the code lacks, and UNGATED fails CI.
 
 ### 4.6 Evidence scoring (NF-AIOPS-005)
-- **`netframe_evidence`** — two axes that never collapse: evidence quality (additive/banded) and confidence (floors/ceilings). Deterministic; anti-hallucination (a cited source absent from telemetry contributes zero + caps confidence); freshness exposed; provenance per factor; **annotation-only, never suppression**.
+- **`netframe_evidence`** - two axes that never collapse: evidence quality (additive/banded) and confidence (floors/ceilings). Deterministic; anti-hallucination (a cited source absent from telemetry contributes zero + caps confidence); freshness exposed; provenance per factor; **annotation-only, never suppression**.
 
 ---
 
-## 5. Bugs Our Own Tooling Caught (the meta-wins)
+## 5. Bugs the Tooling Caught (the meta-wins)
 
-These are the moments the guardrails paid for themselves — regressions caught before they
-reached an operator, several of them mine.
+These are the moments the guardrails paid for themselves: regressions caught before they
+reached an operator, several of them introduced during this very session.
 
 - **Regex boundary escapes (×2):** trailing `)\b` after `dd if=` and leading `\b(` before `/etc/resolv.conf` were dead branches that passed prohibited text straight through. Found by adversarial probing; pinned by test. (#35)
 - **Total negation bypass:** negation was scanned across the whole line, so "power-cycle the VM **to avoid** corruption" escaped entirely. Scoped to a 40-char lookback. (#38)
@@ -199,7 +199,7 @@ NF-AIOPS-005 (evidence scoring).
 ## 8. Owner Follow-Ups (open items)
 
 - **NPM admin password** is now in Vaultwarden but also exists in this session's transcript; rotation offered, deferred to a keyboard session.
-- **Console/chat and ghreview** are policy-gated but **not** evidence-annotated (conversational / portfolio, not material-finding reports) — candidate follow-ups, recorded in the inventory as deliberate.
+- **Console/chat and ghreview** are policy-gated but **not** evidence-annotated (conversational / portfolio, not material-finding reports) - candidate follow-ups, recorded in the inventory as deliberate.
 - **Evidence-scoring weights** are calibrated to 7 frozen fixtures; revisit if real incidents suggest recalibration (each score ships its factor breakdown, so a wrong number is legible).
 - **llm_router / Open WebUI** are deliberately out of the policy boundary (general-purpose chat); revisit if they ever gain tool-calling into the estate.
 
@@ -209,14 +209,14 @@ NF-AIOPS-005 (evidence scoring).
 
 | Risk | Level | Status |
 |---|---|---|
-| Privilege expansion undoing security posture | — | Avoided: arg-free root-owned wrappers only; no broad sudo |
-| Feature becomes a secret-exfiltration path | — | Avoided: hashes/booleans only, never file contents |
-| Config content as prompt-injection vector | — | Avoided: booleans not content into the model context |
+| Privilege expansion undoing security posture | - | Avoided: arg-free root-owned wrappers only; no broad sudo |
+| Feature becomes a secret-exfiltration path | - | Avoided: hashes/booleans only, never file contents |
+| Config content as prompt-injection vector | - | Avoided: booleans not content into the model context |
 | False positives train rubber-stamping (R-04) | LOW | Materialised then closed: POL-002 narrowed, real FPs are must-pass fixtures |
 | Uneven boundary across repos/surfaces | LOW | Closed: Discord gated; inventory + CI keep the denominator honest |
 | Rule-precision fragility (regex both directions) | MED | Accepted: contained by fixtures, adversarial tests, and the visible audit ledger |
 | Annotation noise on bad days | LOW | Watched: only fires for material findings, each self-explaining |
-| Scoring expanding into suppression | — | Prevented by design + test: annotation-only, low confidence never hides a finding |
+| Scoring expanding into suppression | - | Prevented by design + test: annotation-only, low confidence never hides a finding |
 
 ---
 
@@ -224,5 +224,5 @@ NF-AIOPS-005 (evidence scoring).
 
 Every LLM-generated recommendation an operator can see now passes through one policy engine
 (is it allowed?), one evidence engine (how well-supported, how sure?), and one hash-chained
-audit trail (recorded), with the model reduced to what it is good at — wording. That is the
+audit trail (recorded), with the model reduced to what it is good at - wording. That is the
 whole point: **not a more powerful automation system, a more trustworthy one.**
