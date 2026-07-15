@@ -1,6 +1,7 @@
-# Secrets — NEVER commit the monitor SSH keypair
+# Secrets — NEVER commit the monitor SSH keypair or GitHub read token
 monitor_key
 monitor_key.pub
+github_token
 
 # Runtime state and rendered output (regenerated on Jarvis)
 last_run.json
