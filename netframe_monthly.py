@@ -59,7 +59,8 @@ def load_context():
 def summarize_30d():
     if not os.path.exists(HISTORY):
         return {"runs": 0}
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=DAYS)
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(days=DAYS)
     rows = []
     with open(HISTORY) as fh:
         for line in fh:
@@ -74,6 +75,10 @@ def summarize_30d():
                 continue
     if not rows:
         return {"runs": 0}
+    # Honest window: how much of the requested DAYS the retained history spans.
+    # The model is told about a shortfall so it never claims a 30d view it lacks.
+    coverage = round((now - dt.datetime.fromisoformat(rows[0]["ts"])).total_seconds()
+                     / 86400.0, 1)
     verdicts, flips, prev, nonok = {}, 0, None, {}
     for r in rows:
         w = r.get("worst", "?")
@@ -84,8 +89,11 @@ def summarize_30d():
         for node, v in (r.get("verdicts") or {}).items():
             if v not in ("OK", "NOMINAL", None):
                 nonok[node] = nonok.get(node, 0) + 1
-    return {"runs": len(rows), "window_days": DAYS, "verdict_counts": verdicts,
-            "verdict_flips": flips,
+    return {"runs": len(rows), "window_days": DAYS, "coverage_days": coverage,
+            "coverage_note": (None if coverage + 0.5 >= DAYS else
+                              f"history spans only {coverage} of the requested {DAYS} days; "
+                              "state conclusions accordingly and do not claim a full-month view"),
+            "verdict_counts": verdicts, "verdict_flips": flips,
             "non_ok_by_node": dict(sorted(nonok.items(), key=lambda x: -x[1])[:8])}
 
 
@@ -121,7 +129,8 @@ def main():
             body = (f"## Posture this month\nLLM unavailable ({e}); raw 30d summary:\n\n"
                     f"```json\n{json.dumps(summary, indent=2)}\n```")
     report = (f"# NetFRAME Monthly Maturity Report\n\n_Generated {now.isoformat()} by {MODEL} "
-              f"on Jarvis · {summary.get('runs', 0)} runs / {DAYS}d_\n\n---\n\n{body}\n")
+              f"on Jarvis · {summary.get('runs', 0)} runs · "
+              f"{summary.get('coverage_days', 0)}d of {DAYS}d window_\n\n---\n\n{body}\n")
     with open(OUT, "w") as fh:
         fh.write(report)
     os.makedirs(ARCHIVE, exist_ok=True)
