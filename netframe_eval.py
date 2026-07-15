@@ -72,7 +72,8 @@ def run_scenario(path):
         # tests a different program than the one that runs. netframe_policy is the
         # prohibited-recommendation screen; without it the interpreter would crash here
         # and the harness would be grading an interpreter that cannot exist in prod.
-        for aux in ("netframe_knowledge.py", "netframe_policy.py", "netframe_audit.py"):
+        for aux in ("netframe_knowledge.py", "netframe_policy.py", "netframe_audit.py",
+                    "netframe_evidence.py"):
             if os.path.exists(f"{BASE}/{aux}"):
                 shutil.copy(f"{BASE}/{aux}", f"{tmp}/{aux}")
         if os.path.isdir(f"{BASE}/knowledge"):

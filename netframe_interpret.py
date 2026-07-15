@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import netframe_policy  # noqa: E402 - path must be set first; screen is mandatory
+import netframe_evidence  # noqa: E402 - deterministic evidence/confidence scoring
 
 BASE = "/opt/netframe-monitor"
 STATE_FILE = f"{BASE}/last_run.json"
@@ -65,10 +66,12 @@ SYSTEM_PROMPT = (
     "cite it as 'EVT-NNN <title>' and apply its lesson; otherwise write 'novel (no prior match)'. "
     "**Situation:** one line. **Impact:** what it affects and "
     "the blast radius. **Evidence:** the specific metric / log line / SMART attribute, cited "
-    "with numbers. **Likely cause:** ranked hypotheses, not a single guess. **Confidence:** a "
-    "percentage or high/med/low, and what observation would raise it. **Action:** the concrete "
-    "next step, sized to a maintenance window if needed. **Risk if ignored:** what happens and "
-    "on what timeline. **Approval:** 'read-only / informational' or 'needs approval (change)'. "
+    "with numbers. **Likely cause:** ranked hypotheses, not a single guess. **Action:** the "
+    "concrete next step, sized to a maintenance window if needed. **Risk if ignored:** what "
+    "happens and on what timeline. **Approval:** 'read-only / informational' or 'needs approval "
+    "(change)'. DO NOT state a confidence level or percentage: evidence quality and confidence "
+    "are computed deterministically by code and appended after your text; a confidence you "
+    "write would be your opinion of your own correctness and is not wanted. "
     "OMIT the entire Findings section if Overall is NOMINAL and nothing is material.\n"
     "  When the telemetry JSON includes a `dependency_impact` map, it is the DETERMINISTIC "
     "blast radius from the infrastructure knowledge graph (what transitively depends on a "
@@ -314,6 +317,51 @@ def fallback_report(context, err):
     return "\n".join(lines)
 
 
+def _coverage_days(history):
+    """How many days the retained history actually spans (honest time-coverage input)."""
+    rows = [r for r in history if r.get("ts")]
+    if len(rows) < 2:
+        return 0
+    try:
+        a = datetime.fromisoformat(rows[0]["ts"])
+        b = datetime.fromisoformat(rows[-1]["ts"])
+        return round((b - a).total_seconds() / 86400.0, 1)
+    except (ValueError, KeyError):
+        return 0
+
+
+def _evidence_section(state):
+    """Deterministic evidence + confidence for each MATERIAL (non-OK) finding. Returns a
+    labelled markdown section, or '' when everything is nominal. Never suppresses; only
+    annotates. All numbers from netframe_evidence (code), never the model."""
+    cov = _coverage_days(load_history())
+    findings = []
+    for host, checks in state.get("nodes", {}).items():
+        for check, cdata in (checks or {}).items():
+            if cdata.get("verdict") in ("OK", None, "SKIPPED"):
+                continue
+            desc = netframe_evidence.descriptor_from_finding(host, check, cdata, state, cov)
+            findings.append((host, check, netframe_evidence.score(desc)))
+    if not findings:
+        return ""
+    lines = ["\n\n---\n\n## Evidence & confidence (deterministic, not LLM-generated)\n",
+             "_Evidence quality and confidence are computed by code from telemetry "
+             "provenance, not stated by the model. Confidence is about the finding, and it "
+             "is annotation only - it never suppresses anything._\n"]
+    for host, check, a in findings:
+        lines.append(f"- **{host}.{check}** - evidence **{a['evidence_band']}** "
+                     f"({a['evidence_quality']}/100), confidence **{a['confidence']}%**"
+                     f"{'  ⚠️ STALE' if a['freshness']['stale'] else ''}  \n"
+                     f"  _{_explain_conf(a)}_")
+    return "\n".join(lines) + "\n"
+
+
+def _explain_conf(a):
+    parts = [s["provenance"] for s in a["confidence_steps"]
+             if s["step"] != "base_from_evidence"]
+    return "; ".join(parts) if parts else "computed from the evidence base"
+
+
 def write_report(body, state):
     ts = datetime.now(timezone.utc)
     header = (f"# NetFRAME Cluster Health — Interpretation\n\n"
@@ -441,6 +489,18 @@ def main():
                  "flagged to the model as data-only. Someone or something on that system "
                  "may be attempting to influence this report. Review the source lines in "
                  "`last_run.json` before trusting related findings.")
+    # Deterministic evidence + confidence (NF-AIOPS-005). The model no longer rates its own
+    # confidence (removed from the contract above); code computes evidence quality and
+    # confidence per material finding from telemetry provenance and appends them, clearly
+    # labelled. Mandatory explanation, freshness exposed, provenance per factor. Never
+    # suppresses a finding - annotation only. Appended before the policy screen so the
+    # screen also covers this section (it is deterministic and clean, but the boundary
+    # stays universal).
+    try:
+        body += _evidence_section(state)
+    except Exception as exc:  # noqa: BLE001 - annotation must never break the report
+        print(f"WARN: evidence scoring failed ({exc}); no assessment appended",
+              file=sys.stderr)
     # Deterministic prohibited-recommendation screen. This is the ONLY thing standing
     # between the model's prose and the operator: ~1 run in 5 the 7B recommends
     # power-cycling (EVT-004) or replacing a healthy drive (EVT-003). The eval harness

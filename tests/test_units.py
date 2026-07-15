@@ -767,3 +767,17 @@ def test_inventory_execution_surfaces_are_gated():
         if s["can_execute"]:
             assert s["coverage"] in ("gated", "gated-execution"), \
                 f"{s['component']} can execute but is not gated"
+
+
+def test_eval_sandbox_copies_every_module_the_interpreter_imports():
+    """This bug has now happened TWICE - the policy screen and evidence scoring each
+    broke every eval scenario because the interpreter imported a module the sandbox did
+    not copy. Derive the requirement from source so it cannot happen a third time."""
+    import re as _re
+    interp = open(os.path.join(BASE, "netframe_interpret.py")).read()
+    imported = set(_re.findall(r"^import (netframe_\w+)", interp, _re.M))
+    evalsrc = open(os.path.join(BASE, "netframe_eval.py")).read()
+    # the aux tuple the sandbox copies + the interpreter file itself (INTERP)
+    copied = set(_re.findall(r'"(netframe_\w+)\.py"', evalsrc))
+    missing = imported - copied
+    assert not missing, f"interpreter imports {missing} but the eval sandbox does not copy them"

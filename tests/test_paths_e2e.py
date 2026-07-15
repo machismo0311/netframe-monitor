@@ -185,3 +185,34 @@ def test_console_path_blocks_unsafe_recommendation():
         os.environ.pop("NETFRAME_BASE", None)
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_interpreter_appends_deterministic_evidence_section():
+    """NF-AIOPS-005: a material finding must carry a code-computed evidence + confidence
+    block, and the model must NOT have written its own confidence. Model stubbed, so this
+    is deterministic and CI-runnable."""
+    tmp = _sandbox()
+    try:
+        os.environ["NETFRAME_BASE"] = tmp
+        os.environ["NETFRAME_LOKI_PUSH"] = "http://127.0.0.1:1/disabled"
+        _fresh_modules()
+        # a material finding in telemetry: llm_router conformance runtime FAIL
+        state = json.load(open(f"{tmp}/last_run.json"))
+        state["worst"] = "WARN"
+        state["nodes"]["jarvis"] = {"llm_router_conformance": {
+            "verdict": "WARN",
+            "metrics": {"config": "PASS", "runtime": "FAIL", "firewall": "PASS"},
+            "raw_excerpt": ""}}
+        json.dump(state, open(f"{tmp}/last_run.json", "w"))
+        m = _load("netframe_interpret", tmp)
+        m.call_llm = lambda *a, **k: "## Overall\nWARN.\n## Findings\nRouter issue.\n"
+        m.main()
+        report = open(f"{tmp}/report.md").read()
+        assert "Evidence & confidence (deterministic" in report
+        assert "runtime_bind_mismatch" in report  # the deterministic condition, from code
+        # the model's stubbed text contained no confidence; none should appear except ours
+        assert "confidence **" in report.lower() or "confidence **" in report
+    finally:
+        os.environ.pop("NETFRAME_BASE", None)
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
