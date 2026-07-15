@@ -1,0 +1,17 @@
+[Unit]
+Description=NetFRAME Operations Console (read-only chat API + UI)
+Documentation=file:/opt/netframe-monitor/netframe_console.py
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/netframe-monitor/netframe_console.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=NetFRAME retrieval-index rebuild timer (daily ~07:15)
+
+[Timer]
+OnCalendar=*-*-* 07:15:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
