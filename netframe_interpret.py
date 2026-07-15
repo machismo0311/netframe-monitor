@@ -28,7 +28,9 @@ REPORT_KEEP = 96  # ~24h of archives at 15-min cadence
 CONTEXT_DIR = f"{BASE}/context"   # optional standing context (*.md), e.g. pentest tracker
 CONTEXT_CAP = 16000               # max chars of standing operational context fed to the model
 WEB_DIR = f"{BASE}/web"           # served over HTTP (never contains the key)
-WEB_FILE = f"{WEB_DIR}/index.html"
+# Standalone health page. The unified memory dashboard (netframe_web.py) owns index.html;
+# it renders this report's markdown into its Health tab.
+WEB_FILE = f"{WEB_DIR}/health.html"
 WEB_REFRESH = 120                 # <meta refresh> seconds
 # JARVIS greeting shown as the page hero (override with NETFRAME_GREETING).
 GREETING = os.environ.get("NETFRAME_GREETING", "At your service, sir.")

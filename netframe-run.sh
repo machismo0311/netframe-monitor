@@ -5,4 +5,6 @@
 /usr/bin/python3 /opt/netframe-monitor/netframe_monitor.py
 rc=$?
 /usr/bin/python3 /opt/netframe-monitor/netframe_interpret.py || true
+# Rebuild the unified memory dashboard (index.html) from all reports + the ledger.
+/usr/bin/python3 /opt/netframe-monitor/netframe_web.py || true
 exit "$rc"
