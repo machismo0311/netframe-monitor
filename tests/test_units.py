@@ -654,3 +654,63 @@ def test_no_generation_path_escapes_the_gate():
         if "netframe_policy.enforce(" not in src:
             unprotected.append(mod)
     assert not unprotected, f"LLM generation paths with NO policy gate: {unprotected}"
+
+
+def test_trailing_negation_word_does_not_exempt_an_unsafe_recommendation():
+    """TOTAL BYPASS found 2026-07-15. Negation was scanned across the whole line, so any
+    recommendation containing 'avoid'/'never'/'without' anywhere was skipped entirely.
+    "Power-cycle the Wazuh VM to avoid further corruption" is a natural phrasing and it
+    walked straight past the screen.
+    """
+    ev = {"smart_health_failed": False}
+    for line in ["Power-cycle the Wazuh VM to avoid further corruption.",
+                 "Replace /dev/sdc immediately to avoid data loss.",
+                 "Run fsck on the pool to avoid downtime.",
+                 "Never mind the above, power-cycle VM 104.",
+                 "Rebuild the container without delay."]:
+        r = pol.screen(line, evidence=ev, audit=False)
+        assert not r["clean"], f"NEGATION BYPASS: {line}"
+
+
+def test_governing_negation_still_exempts_correct_advice():
+    ev = {"smart_health_failed": False}
+    for line in ["Do not power-cycle the Wazuh VM; restart wazuh-indexer in place.",
+                 "Never power-cycle this guest.",
+                 "Avoid replacing the drive: the pending count is benign.",
+                 "This should not be power-cycled."]:
+        r = pol.screen(line, evidence=ev, audit=False)
+        assert r["clean"], f"FALSE POSITIVE on correct advice: {line}"
+
+
+def test_pol009_gate_is_independent_of_pol002():
+    """Narrowing POL-002 silently broke POL-009 because they shared a predicate. The claim
+    rule must keep firing with no device named and no immediacy at all."""
+    ev = {"smart_health_failed": False}
+    r = pol.screen("The disk is failing and should be watched.", evidence=ev, audit=False)
+    assert not r["clean"] and r["blocked"][0]["rule_id"] == "POL-009"
+    # And it must still respect evidence.
+    ok = pol.screen("The disk is failing; SMART health FAILED.",
+                    evidence={"smart_health_failed": True}, audit=False)
+    assert ok["clean"]
+    pol002 = [x for x in pol.RULES if x["id"] == "POL-002"][0]
+    pol009 = [x for x in pol.RULES if x["id"] == "POL-009"][0]
+    assert pol002["blocked_if"] is not pol009["blocked_if"], \
+        "POL-002 and POL-009 share a gate; narrowing one will silently weaken the other"
+
+
+def test_pol002_narrowed_blocks_actionable_allows_planning():
+    ev = {"smart_health_failed": False}
+    # Actionable now -> block
+    for line in ["Recommendation: replace the drive /dev/sdc.",
+                 "Plan to swap the disk sdc during the next maintenance window.",
+                 "Replace the affected SSDs immediately to avoid data loss.",
+                 "RMA the SSD showing reallocated sectors."]:
+        r = pol.screen(line, evidence=ev, audit=False)
+        assert not r["clean"], f"actionable replacement NOT blocked: {line}"
+    # Planning / conditional / age-based -> allow
+    for line in ["Plan a disk replacement schedule for the raidz1 arrays, oldest first.",
+                 "Monitor SMART attributes; if issues arise, consider replacing the disks.",
+                 "Monitor for ZFS errors and replace the drive if necessary.",
+                 "The pools use aged disks; budget for end-of-life replacement next year."]:
+        r = pol.screen(line, evidence=ev, audit=False)
+        assert r["clean"], f"planning/conditional advice WRONGLY blocked: {line}"
