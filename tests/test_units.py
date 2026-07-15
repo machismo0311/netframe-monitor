@@ -6,6 +6,7 @@ regression over full LLM scenarios lives in netframe_eval.py, which runs on Jarv
 Run: python3 -m pytest tests/ -q   (or plain python3 tests/test_units.py)
 """
 import importlib.util
+import json
 import os
 import re
 
@@ -529,3 +530,103 @@ def test_eval_scenario_prohibited_substrings_are_all_covered_by_a_rule():
             r = pol.screen(samples[sub], evidence=ev, audit=False)
             assert not r["clean"], f"{sub!r} not covered by any POL rule"
 
+
+
+# ---- policy fixtures: the same boundary, asserted deterministically ----
+
+def _fixtures():
+    with open(os.path.join(BASE, "eval", "policy-fixtures.json")) as fh:
+        return json.load(fh)
+
+
+def test_fixtures_must_block_all():
+    """100% deterministic block rate on every known-unsafe fixture."""
+    fx = _fixtures()
+    escaped = []
+    for case in fx["must_block"]:
+        r = pol.screen(case["text"], evidence=case["evidence"], audit=False)
+        if r["clean"]:
+            escaped.append(case["id"])
+            continue
+        got = r["blocked"][0]["rule_id"]
+        assert got == case["rule"], f"{case['id']}: expected {case['rule']}, got {got}"
+    assert not escaped, f"UNSAFE TEXT REACHED THE OPERATOR: {escaped}"
+
+
+def test_fixtures_must_pass_all():
+    """A screen that blocks correct advice gets ignored, and an ignored screen protects
+    nobody. False positives are a safety failure, not an inconvenience."""
+    fx = _fixtures()
+    wrong = []
+    for case in fx["must_pass"]:
+        r = pol.screen(case["text"], evidence=case["evidence"], audit=False)
+        if not r["clean"]:
+            wrong.append((case["id"], r["blocked"][0]["rule_id"]))
+    assert not wrong, f"FALSE POSITIVES on correct advice: {wrong}"
+
+
+def test_fixtures_cover_every_required_class():
+    fx = _fixtures()
+    ids = {c["id"] for c in fx["must_block"]}
+    for required in ("EVT-003", "EVT-004", "false-dns", "false-firewall",
+                     "prompt-influenced"):
+        assert any(i.startswith(required) for i in ids), f"no fixture class: {required}"
+    assert any(c["evidence"]["smart_health_failed"] for c in fx["must_pass"]), \
+        "no evidence-backed must-pass fixture"
+
+
+# ---- every LLM->operator path must pass through the ONE gate ----
+
+LLM_PATHS = {
+    "netframe_interpret": "interpreter",
+    "netframe_chat": "console",
+    "netframe_daily": "daily",
+    "netframe_monthly": "monthly",
+    "netframe_chief": "chief",
+}
+
+
+def test_every_llm_path_calls_the_shared_gate():
+    """Wiring test. A new report type that forgets the gate is the exact way this
+    boundary rots back to partial - which is the defect that started this phase."""
+    missing = []
+    for mod, source in LLM_PATHS.items():
+        src = open(os.path.join(BASE, f"{mod}.py")).read()
+        if "netframe_policy.enforce(" not in src:
+            missing.append(mod)
+        elif f'source="{source}"' not in src:
+            missing.append(f"{mod} (wrong source tag)")
+    assert not missing, f"LLM paths NOT behind the policy gate: {missing}"
+
+
+def test_no_path_reimplements_the_rules():
+    """Requirement: one shared component, rules never duplicated. If a path defines its
+    own patterns they will drift, and drift between paths is how this started."""
+    offenders = []
+    for mod in LLM_PATHS:
+        src = open(os.path.join(BASE, f"{mod}.py")).read()
+        if "power-cycle" in src.lower() and mod != "netframe_policy":
+            # the prompt may mention it as guidance; a compiled pattern would be a rule copy
+            if "re.compile" in src and "POL-" in src:
+                offenders.append(mod)
+    assert not offenders, f"paths reimplementing policy rules: {offenders}"
+
+
+def test_enforce_returns_screened_text_and_blocks():
+    text, blocked = pol.enforce("Recommendation: power-cycle the Wazuh VM.",
+                                source="unittest", state={})
+    assert "[BLOCKED - Jarvis policy POL-001" in text
+    assert "power-cycle the Wazuh VM" not in text
+    assert [b["rule_id"] for b in blocked] == ["POL-001"]
+
+
+def test_enforce_fails_loud_not_closed(monkeypatch):
+    """If the screen itself breaks, the operator must still get the report AND be told it
+    is unscreened. Silently emitting it would be worse than the original defect."""
+    def boom(*a, **k):
+        raise RuntimeError("screen exploded")
+    monkeypatch.setattr(pol, "screen", boom)
+    text, blocked = pol.enforce("Some report body.", source="unittest", state={})
+    assert "Some report body." in text
+    assert "UNSCREENED" in text
+    assert blocked == []

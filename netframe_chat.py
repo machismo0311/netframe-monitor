@@ -128,16 +128,9 @@ def answer(question, mode="operator", deep=False):
     # TAGS; it does nothing about prose that recommends a prohibited action in words, and
     # the console is just as user-visible as the report. Evidence is read from live state
     # so the evidence-gated rules (drive replacement) behave identically on both paths.
-    blocked = []
-    try:
-        import netframe_policy
-        state = _read_json(f"{BASE}/last_run.json") or {}
-        verdict = netframe_policy.screen(
-            reply, evidence=netframe_policy.evidence_from_state(state), source="console")
-        reply, blocked = verdict["text"], verdict["blocked"]
-    except Exception as e:  # noqa: BLE001 - never break the console over the screen
-        reply += (f"\n\n> **Safety note:** the prohibited-recommendation screen failed to "
-                  f"run ({e}); this answer is UNSCREENED against policy.")
+    import netframe_policy
+    reply, blocked = netframe_policy.enforce(
+        reply, source="console", state=_read_json(f"{BASE}/last_run.json") or {})
     result = {"question": question, "mode": mode, "model": model,
               "elapsed": round(time.time() - t0, 1),
               "policy_blocked": [b["rule_id"] for b in blocked],

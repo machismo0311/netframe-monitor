@@ -448,21 +448,7 @@ def main():
     # never the model - a model that reliably honoured the restriction would not have
     # emitted the text in the first place. Screening `body` here covers report.md AND the
     # web page, since write_html renders from the file this writes.
-    try:
-        verdict = netframe_policy.screen(
-            body, evidence=netframe_policy.evidence_from_state(state), source="interpreter")
-        body = verdict["text"]
-        if verdict["blocked"]:
-            rules = ", ".join(sorted({b["rule_id"] for b in verdict["blocked"]}))
-            print(f"POLICY: blocked {len(verdict['blocked'])} recommendation(s) [{rules}]",
-                  file=sys.stderr)
-    except Exception as exc:  # noqa: BLE001 - see below
-        # Fail LOUD but do not fail closed on the whole report: an operator with a report
-        # carrying a visible screen-failure warning is better off than one with no report.
-        print(f"WARN: policy screen errored ({exc}); report NOT screened", file=sys.stderr)
-        body += ("\n\n---\n**Safety note (deterministic):** the prohibited-recommendation "
-                 "screen failed to run on this report, so its recommendations are "
-                 "UNSCREENED. Treat any action it suggests as unverified against policy.")
+    body, _ = netframe_policy.enforce(body, source="interpreter", state=state)
     write_report(body, state)
     # Render the exact report.md content (header + body) to the served web page.
     try:
