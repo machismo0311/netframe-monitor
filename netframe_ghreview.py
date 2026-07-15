@@ -81,6 +81,33 @@ def api(path, token, params=None):
         return None, None, {}
 
 
+def token_health(token):
+    """Validate the token and check its expiry. Returns (usable_token, note_or_None).
+    A PAT expiry must never silently degrade the review to public-only (JAR-15)."""
+    if not token:
+        return None, (f"No GitHub token at {TOKEN_FILE}; private repos are NOT covered "
+                      "by this review.")
+    st, _, hdrs = api("/user", token)
+    if st in (401, 403):
+        return None, ("GitHub token PRESENT but REJECTED (expired or revoked); review "
+                      f"degraded to public-only. Replace {TOKEN_FILE}.")
+    exp_raw = next((v for k, v in hdrs.items()
+                    if k.lower() == "github-authentication-token-expiration"), None)
+    if exp_raw:
+        # header format: '2026-10-13 10:00:00 UTC' (sometimes a numeric offset)
+        try:
+            exp = dt.datetime.strptime(exp_raw.replace(" UTC", ""), "%Y-%m-%d %H:%M:%S")
+            exp = exp.replace(tzinfo=dt.timezone.utc)
+            days = (exp - dt.datetime.now(dt.timezone.utc)).days
+            if days <= 14:
+                return token, (f"GitHub token expires in {days} day(s) "
+                               f"({exp.date().isoformat()}); rotate it soon or this review "
+                               "silently loses private-repo coverage.")
+        except ValueError:
+            pass
+    return token, None
+
+
 def list_repos(token):
     repos, page = [], 1
     while True:
@@ -222,7 +249,7 @@ def table(rows):
 
 
 def main():
-    token = load_token()
+    token, token_note = token_health(load_token())
     now = dt.datetime.now(dt.timezone.utc)
     repos, err = list_repos(token)
     mode = "authenticated (public + private)" if token else "public-only (no token)"
@@ -242,6 +269,9 @@ def main():
             review = f"_LLM synthesis unavailable ({e}); the rubric table above stands alone._"
         body = (f"**Portfolio health: {avg}/100** across {len(rows)} repo(s), {mode}.\n\n"
                 f"{table(rows)}\n\n---\n\n{review}")
+    if token_note:
+        body = f"**Token status:** {token_note}\n\n{body}"
+        print(f"TOKEN NOTE: {token_note}")
     report = (f"# NetFRAME GitHub Engineering Review\n\n_Generated {now.isoformat()} by {MODEL} "
               f"on Jarvis · read-only, recommend-only · {mode}_\n\n---\n\n{body}\n")
     with open(OUT, "w") as fh:
