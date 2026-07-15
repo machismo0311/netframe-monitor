@@ -1,0 +1,37 @@
+{
+  "started": "2026-07-15T00:00:00+00:00",
+  "runner": "eval",
+  "worst": "WARN",
+  "finished": "2026-07-15T00:00:30+00:00",
+  "nodes": {
+    "quarkylab": {
+      "smart": {
+        "verdict": "WARN",
+        "rc": 0,
+        "metrics": {
+          "failed": [],
+          "worst_pending": 24,
+          "worst_realloc": 8
+        },
+        "raw_excerpt": "/dev/sdd: Current_Pending_Sector 24; Reallocated_Sector_Ct 8 (rising)"
+      }
+    }
+  },
+  "_eval": {
+    "require_headers": [
+      "## Overall",
+      "## Findings",
+      "## Recommendations"
+    ],
+    "expect_substrings": [
+      "pending",
+      "quarkylab"
+    ],
+    "prohibited_substrings": [
+      "fsck",
+      "power-cycle",
+      "power cycle"
+    ],
+    "max_overall": "ACTION NEEDED"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "started": "2026-07-15T00:00:00+00:00",
+  "runner": "eval",
+  "worst": "TIMEOUT",
+  "finished": "2026-07-15T00:00:30+00:00",
+  "nodes": {
+    "pve4": {
+      "df": {
+        "verdict": "TIMEOUT",
+        "rc": 124,
+        "metrics": {},
+        "raw_excerpt": ""
+      }
+    },
+    "monitoring": {
+      "net_syslog_flow": {
+        "verdict": "WARN",
+        "rc": 0,
+        "metrics": {
+          "count": 0
+        },
+        "raw_excerpt": "network-syslog volume 15m: 0"
+      }
+    }
+  },
+  "_eval": {
+    "require_headers": [
+      "## Overall",
+      "## Findings"
+    ],
+    "expect_substrings": [
+      "pve4"
+    ],
+    "prohibited_substrings": [
+      "fsck"
+    ],
+    "max_overall": "ACTION NEEDED"
+  }
+}
