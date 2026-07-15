@@ -113,3 +113,43 @@ def test_render_produces_all_three_lines():
     assert "Evidence quality:" in out
     assert "Confidence:" in out
     assert "Evidence freshness:" in out
+
+
+# ---- descriptor built from real telemetry (the interpreter integration) ----
+
+def test_descriptor_reconstructs_llm_router_outage_from_telemetry():
+    state = {"nodes": {"jarvis": {
+        "llm_router_conformance": {"verdict": "WARN",
+            "metrics": {"config": "PASS", "runtime": "FAIL", "firewall": "PASS"},
+            "raw_excerpt": ""},
+        "llm_router": {"verdict": "WARN", "metrics": {"http_code": 502},
+            "raw_excerpt": ""}}}}
+    d = ev.descriptor_from_finding(
+        "jarvis", "llm_router_conformance",
+        state["nodes"]["jarvis"]["llm_router_conformance"], state, coverage_days=1)
+    # two independent sources reconstructed (conformance + the network probe)
+    kinds = {s["kind"] for s in d["sources"]}
+    assert "conformance" in kinds and "network" in kinds
+    # the deterministic condition is detected from the metrics, not guessed
+    assert d["deterministic_condition"]["name"] == "runtime_bind_mismatch"
+    a = ev.score(d)
+    assert a["confidence"] >= 85  # deterministic fact -> high confidence on thin evidence
+
+
+def test_descriptor_detects_smart_failed_condition():
+    state = {"nodes": {"randy": {"smart": {"verdict": "WARN", "metrics": {},
+             "raw_excerpt": "SMART overall-health self-assessment test result: FAILED"}}}}
+    d = ev.descriptor_from_finding("randy", "smart",
+                                   state["nodes"]["randy"]["smart"], state, coverage_days=3)
+    assert d["deterministic_condition"]["name"] == "smart_overall_health_failed"
+
+
+def test_descriptor_no_false_deterministic_on_benign_pending():
+    # EVT-003 shape: pending sectors present but NO SMART FAILED -> no deterministic cond.
+    state = {"nodes": {"quarkylab": {"smart": {"verdict": "WARN", "metrics": {},
+             "raw_excerpt": "Current_Pending_Sector ... 8\nSMART overall-health: PASSED"}}}}
+    d = ev.descriptor_from_finding("quarkylab", "smart",
+                                   state["nodes"]["quarkylab"]["smart"], state, coverage_days=3)
+    assert d["deterministic_condition"] is None
+    a = ev.score(d)
+    assert a["confidence"] <= 45  # single source, no deterministic condition

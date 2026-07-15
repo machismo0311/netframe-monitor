@@ -258,6 +258,66 @@ def _explain(a):
     return "; ".join(parts) if parts else "computed from evidence base"
 
 
+# --- Building descriptors from real telemetry (the interpreter's entry point) --------
+# Deterministic fail predicates: a metric pattern that SETTLES a question without
+# inference. Each maps a check to (condition_name, holds?) read only from parsed metrics.
+def _deterministic_condition(check, metrics, raw):
+    r = str(raw or "")
+    if check == "smart" and "self-assessment test result: FAILED" in r:
+        return {"name": "smart_overall_health_failed", "holds": True}
+    if check == "llm_router_conformance":
+        if metrics.get("runtime") == "FAIL":
+            return {"name": "runtime_bind_mismatch", "holds": True}
+        if metrics.get("firewall") == "FAIL":
+            return {"name": "firewall_not_enforcing", "holds": True}
+    if check == "wazuh" and metrics.get("core_down"):
+        return {"name": "wazuh_core_daemon_down", "holds": True}
+    return None
+
+
+def descriptor_from_finding(host, check, cdata, state, coverage_days, requested_days=14):
+    """Build a finding descriptor DETERMINISTICALLY from telemetry for one non-OK check.
+
+    Conservative by design: it asserts only what the telemetry supports and leaves
+    everything else null, so the scorer's disbelief-default governs. The claim is the
+    OBSERVED finding; where the interpreter later resolves a recommended action, a richer
+    descriptor with known_event direction can be supplied. No model involved.
+    """
+    metrics = cdata.get("metrics", {}) or {}
+    raw = cdata.get("raw_excerpt", "")
+    # The failing check is one source. A corroborating check on the same host that is also
+    # non-OK and of a different kind adds an independent source.
+    KIND = {"smart": "smart", "df": "ssh", "zpool": "ssh", "journal_errors": "ssh",
+            "gpu": "ssh", "llm_router_conformance": "conformance",
+            "llm_router": "network", "wazuh": "ssh", "grafana": "network",
+            "loki": "network", "pihole": "network", "backup_verify": "ssh"}
+    sources = [{"check": f"{host}.{check}", "kind": KIND.get(check, "ssh"),
+                "agrees": True, "value": cdata.get("verdict"),
+                "age_s": None, "resolved": True}]
+    for other, od in (state.get("nodes", {}).get(host, {}) or {}).items():
+        if other != check and od.get("verdict") not in ("OK", None, "SKIPPED"):
+            k = KIND.get(other, "ssh")
+            if k != KIND.get(check, "ssh"):
+                sources.append({"check": f"{host}.{other}", "kind": k, "agrees": True,
+                                "value": od.get("verdict"), "age_s": None, "resolved": True})
+    dep = False
+    try:
+        import netframe_knowledge
+        dep = bool(netframe_knowledge.impact_for_failures([f"{host}.{check}", host]))
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "claim": f"{host}.{check} is {cdata.get('verdict', 'non-OK')} (observed finding)",
+        "sources": sources,
+        "deterministic_condition": _deterministic_condition(check, metrics, raw),
+        "time_coverage": {"covered_days": coverage_days, "requested_days": requested_days},
+        "trend_duration_points": 0,
+        "known_event": None,
+        "dependency_confirmed": dep,
+        "prior_incident_similarity": None,
+    }
+
+
 def main():
     import json
     if len(sys.argv) > 1:
