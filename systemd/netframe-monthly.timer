@@ -1,0 +1,10 @@
+[Unit]
+Description=NetFRAME monthly maturity report timer (1st of month ~07:35)
+
+[Timer]
+OnCalendar=*-*-01 07:35:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
