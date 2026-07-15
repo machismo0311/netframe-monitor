@@ -60,9 +60,28 @@ def test_console_auth_401_ok_200_public():
 def test_auth_guard_labels_have_no_three_digit_number():
     # The classifier regexes out the FIRST `HTTP <3 digits>` in the output, so a
     # 3-digit number in the echoed label would be read as the status code.
-    for cmd in (mon.AUTHGUARD, mon.CONSOLE_AUTHGUARD):
+    for cmd in (mon.AUTHGUARD, mon.CONSOLE_AUTHGUARD, mon.LLM_ROUTER):
         label = cmd.split("curl")[0]
         assert not re.search(r"\d{3}", label), label
+
+
+def test_llm_router_200_ok_502_warn():
+    assert mon.classify("llm_router", 0, "HTTP 200") == "OK"
+    # 502 = NPM reached, backend did not answer (the 2026-07-14 loopback-bind bug).
+    assert mon.classify("llm_router", 0, "HTTP 502") == "WARN"
+    # 000 = DNS or NPM itself unreachable.
+    assert mon.classify("llm_router", 0, "HTTP 000") == "WARN"
+    assert mon.classify("llm_router", 0, "") == "WARN"
+
+
+def test_llm_router_probes_via_npm_not_localhost():
+    # Regression guard for the actual 2026-07-14 outage: llm_router stayed "active"
+    # and localhost:8000 answered 200 while its bind had regressed to 127.0.0.1, so
+    # Open WebUI (a different host) was broken and a localhost probe saw nothing
+    # wrong. The probe MUST traverse the real network path.
+    assert "llm.netframe.local" in mon.LLM_ROUTER
+    assert "127.0.0.1" not in mon.LLM_ROUTER
+    assert "localhost" not in mon.LLM_ROUTER
 
 
 def test_wazuh_optional_daemon_down_is_ok():

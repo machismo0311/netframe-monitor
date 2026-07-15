@@ -116,6 +116,15 @@ AUTHGUARD = ("echo -n 'health.kylemason.org (auth-gated) HTTP '; "
 CONSOLE_AUTHGUARD = ("echo -n 'console.kylemason.org (auth-gated) HTTP '; "
                      "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
                      "https://console.kylemason.org")
+# llm_router (Jarvis :8000) serves Open WebUI, which lives on another host. Probe it
+# through NPM — the path a real consumer takes — NOT via localhost. On 2026-07-14 its
+# bind regressed to 127.0.0.1: the service stayed "active", localhost still answered
+# 200, and Open WebUI was quietly broken for a day. A localhost probe would have
+# reported healthy throughout. This exercises DNS + NPM + the bind + the :8000
+# allowlist in one shot.
+LLM_ROUTER = ("echo -n 'llm.netframe.local (llm_router via NPM) HTTP '; "
+              "/usr/bin/curl -s -o /dev/null -w '%{http_code}\\n' -m 8 "
+              "http://llm.netframe.local/v1/models")
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU}},
@@ -128,7 +137,7 @@ NODES = {
     # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
     "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
-    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "llm_router": LLM_ROUTER, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
 }
 
 SSH_OPTS = [
@@ -392,6 +401,12 @@ def parse_page_auth(out):
     return {"http_code": code, "auth_enforced": code == 401}
 
 
+def parse_llm_router(out):
+    m = re.search(r"HTTP\s+(\d{3})", out)
+    code = int(m.group(1)) if m else None
+    return {"http_code": code, "up": code == 200}
+
+
 def parse_wazuh(out):
     status = {}
     for line in out.splitlines():
@@ -410,7 +425,7 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "guests": parse_guests, "grafana": parse_grafana,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
            "wazuh": parse_wazuh, "page_auth": parse_page_auth,
-           "console_auth": parse_page_auth,
+           "console_auth": parse_page_auth, "llm_router": parse_llm_router,
            "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog}
 
 
@@ -462,6 +477,12 @@ def classify(name, rc, out):
         # 401 = NPM auth enforced (healthy). 200 = access list detached (public!).
         m = re.search(r"HTTP\s+(\d{3})", out)
         return "OK" if (m and m.group(1) == "401") else "WARN"
+    if name == "llm_router":
+        # 200 = reachable over its real network path. 502 = NPM can't reach the
+        # backend (bind regressed to loopback, or the service is down); 000 = DNS
+        # or NPM itself is unreachable.
+        m = re.search(r"HTTP\s+(\d{3})", out)
+        return "OK" if (m and m.group(1) == "200") else "WARN"
     if name == "wazuh":
         # `wazuh-control status` exits non-zero if ANY daemon (incl. optional ones
         # that are down by design) isn't running, so rc is not a health signal.
@@ -513,7 +534,7 @@ def flatten_metrics(nodes):
             if name == "guests":
                 flat[f"{host}.guests.running"] = m.get("running")
                 flat[f"{host}.guests.stopped"] = m.get("stopped")
-            if name in ("grafana", "prometheus", "loki", "pihole"):
+            if name in ("grafana", "prometheus", "loki", "pihole", "llm_router"):
                 flat[f"{host}.{name}.up"] = 1 if m.get("up") else 0
             if name == "wazuh":
                 flat[f"{host}.wazuh.up"] = 1 if m.get("up") else 0
