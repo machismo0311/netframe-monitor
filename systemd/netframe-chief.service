@@ -1,0 +1,15 @@
+[Unit]
+Description=NetFRAME weekly Chief Engineer report (72B synthesis, read-only)
+Documentation=file:/opt/netframe-monitor/netframe_chief.py
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Nice=18
+Environment=NETFRAME_LLM_MODEL=qwen2.5:72b
+Environment=NETFRAME_LLM_TIMEOUT=900
+ExecStart=/usr/bin/python3 /opt/netframe-monitor/netframe_chief.py
+TimeoutStartSec=1200
