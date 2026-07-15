@@ -318,6 +318,73 @@ def descriptor_from_finding(host, check, cdata, state, coverage_days, requested_
     }
 
 
+# --- The shared report section (NF-AIOPS-005 rollout) --------------------------------
+# ONE implementation for every report path. No path calculates its own confidence or
+# evidence quality, interprets provenance differently, or renders its own variant: they
+# all call section_for_current_state() and get identical semantics. This is the same
+# single-engine rule as netframe_policy.enforce().
+
+def coverage_days_from_history(history_path):
+    """Days actually spanned by retained history - the honest time-coverage input."""
+    try:
+        with open(history_path) as fh:
+            rows = [line for line in fh if line.strip()]
+        if len(rows) < 2:
+            return 0
+        import json as _json
+        from datetime import datetime as _dt
+        a = _dt.fromisoformat(_json.loads(rows[0])["ts"])
+        b = _dt.fromisoformat(_json.loads(rows[-1])["ts"])
+        return round((b - a).total_seconds() / 86400.0, 1)
+    except (OSError, ValueError, KeyError):
+        return 0
+
+
+def section_for_state(state, coverage_days, requested_days=14):
+    """Deterministic evidence + confidence markdown for each MATERIAL (non-OK) finding
+    in `state`. Returns '' when everything is nominal. Annotation only: it never
+    suppresses a finding, and low confidence never hides anything - suppression is the
+    policy engine's job and only for prohibited actions."""
+    findings = []
+    for host, checks in (state or {}).get("nodes", {}).items():
+        for check, cdata in (checks or {}).items():
+            if cdata.get("verdict") in ("OK", None, "SKIPPED"):
+                continue
+            desc = descriptor_from_finding(host, check, cdata, state,
+                                           coverage_days, requested_days)
+            findings.append((host, check, score(desc)))
+    if not findings:
+        return ""
+    lines = ["\n\n---\n\n## Evidence & confidence (deterministic, not LLM-generated)\n",
+             "_Evidence quality and confidence are computed by code from telemetry "
+             "provenance, not stated by the model. Confidence is about the finding, and "
+             "it is annotation only - it never suppresses anything._\n"]
+    for host, check, a in findings:
+        expl = "; ".join(s["provenance"] for s in a["confidence_steps"]
+                         if s["step"] != "base_from_evidence") or "computed from evidence"
+        lines.append(f"- **{host}.{check}** - evidence **{a['evidence_band']}** "
+                     f"({a['evidence_quality']}/100), confidence **{a['confidence']}%**"
+                     f"{'  ⚠️ STALE' if a['freshness']['stale'] else ''}  \n"
+                     f"  _{expl}_")
+    return "\n".join(lines) + "\n"
+
+
+def section_for_current_state(base=None):
+    """One-line entry point for report paths: loads last_run.json + history coverage from
+    `base` and returns the section. Never raises - a failed annotation returns '' with a
+    stderr warning, because annotation must never break a report."""
+    import json as _json
+    base = base or os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
+    try:
+        with open(f"{base}/last_run.json") as fh:
+            state = _json.load(fh)
+        cov = coverage_days_from_history(f"{base}/history.jsonl")
+        return section_for_state(state, cov)
+    except Exception as exc:  # noqa: BLE001 - annotation only, never fatal
+        print(f"WARN: evidence annotation unavailable ({exc})", file=sys.stderr)
+        return ""
+
+
 def main():
     import json
     if len(sys.argv) > 1:
