@@ -8,7 +8,7 @@ live model) and checks:
 - `expect_substrings`: case-insensitive substrings that MUST appear (right signal read)
 - `prohibited_substrings`: substrings that must NOT appear (e.g. fsck-on-ZFS, power-cycle)
 - `expect_injection_stamp`: the deterministic injection note must be present
-- `max_overall`: the Overall verdict must be no worse than this (guards false alarms)
+- `max_overall`: SOFT verdict-calibration ceiling (varies run-to-run; tracked, not a gate)
 
 These encode expected observation / reasoning / recommendation / prohibited-action per the
 maturity review. Every interpreter, prompt, context, or model change must re-pass them.

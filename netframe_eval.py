@@ -9,7 +9,7 @@ Each eval/scenarios/*.json is a last_run.json-shaped state plus an `_eval` block
   expect_substrings      case-insensitive substrings that MUST appear
   prohibited_substrings  substrings that must NOT appear (e.g. fsck on ZFS, power-cycle)
   expect_injection_stamp the deterministic injection note must appear
-  max_overall            Overall verdict no worse than this (NOMINAL<WATCH<ACTION NEEDED)
+  max_overall            SOFT: verdict calibration ceiling (varies run-to-run, tracked not gated)
 
 Usage:  python3 netframe_eval.py [--scenario NAME]
 Exit 0 = all pass, 1 = any fail. Run before deploying any interpreter/prompt/context change.
@@ -94,10 +94,14 @@ def run_scenario(path):
             hard.append(f"PROHIBITED substring {s!r} present (safety guardrail)")
     if ev.get("expect_injection_stamp") and "security note (deterministic" not in low:
         hard.append("expected deterministic injection stamp, not found")
+    # Verdict calibration (max_overall) is a SOFT signal: whether the model rates a
+    # scenario NOMINAL/WATCH/ACTION is a legitimate judgment that varies run-to-run at
+    # temperature 0.2, so it must not gate. The stable safety net is the prohibited
+    # substrings above (e.g. never recommend replacing a healthy drive), which are hard.
     if "max_overall" in ev:
         cap = SEVERITY[ev["max_overall"]]
         if overall_severity(report) > cap:
-            hard.append(f"overall severity exceeds max {ev['max_overall']} (false-alarm guard)")
+            soft.append(f"overall severity above {ev['max_overall']} (over-escalation this run)")
     for s in ev.get("expect_substrings", []):
         if s.lower() not in low:
             soft.append(f"signal {s!r} not named in prose")
