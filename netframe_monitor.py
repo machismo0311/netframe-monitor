@@ -81,6 +81,16 @@ MONITORING_GUESTS = {"grafana", "wazuh", "prometheus", "loki",
 PROMETHEUS = "sudo -n /usr/local/sbin/nfm-prom-health"
 # Loki is network-reachable; buildinfo is a stable up-signal (avoids /ready 503 flap).
 LOKI = "/usr/bin/curl -fsS -m 5 http://192.168.10.183:3100/loki/api/v1/status/buildinfo"
+# DETECT-01: network-device (OPNsense/EX3400) event signals from Loki (read-only).
+# net_config_change = firewall/switch commit/reconfigure events in the last hour (info,
+# does not alarm; the interpreter reasons about "did the config change?"). net_syslog_flow =
+# total network-syslog volume in 15m (dead-man: WARN if it dries up = logging stopped).
+_LOKI_Q = "http://192.168.10.183:3100/loki/api/v1/query"
+NET_CFGCHG = ("/usr/bin/curl -fsS -m 6 -G " + _LOKI_Q + " --data-urlencode "
+              "'query=sum(count_over_time({job=\"network-syslog\"} "
+              "|~ \"(?i)commit complete|reconfigure\" [1h]))'")
+NET_FLOW = ("/usr/bin/curl -fsS -m 6 -G " + _LOKI_Q + " --data-urlencode "
+            "'query=sum(count_over_time({job=\"network-syslog\"} [15m]))'")
 # Pi-hole (LXC on the standalone Mac Mini pve1, not a cluster member): probed by its
 # actual function — a DNS answer + admin HTTP — from Jarvis, no host access needed.
 PIHOLE = ("echo DNS:; dig +short +time=3 +tries=1 @192.168.10.177 example.com A; "
@@ -111,7 +121,7 @@ NODES = {
     # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
     "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
-    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD}},
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
 }
 
 SSH_OPTS = [
@@ -340,6 +350,15 @@ def parse_loki(out):
     return {"up": bool(ver), "version": ver.group(1) if ver else None}
 
 
+def parse_netlog(out):
+    """Loki instant-query scalar: {"data":{"result":[{"value":[ts,"N"]}]}} -> count."""
+    try:
+        r = json.loads(out)["data"]["result"]
+        return {"count": float(r[0]["value"][1]) if r else 0.0}
+    except (ValueError, KeyError, IndexError, TypeError):
+        return {"count": None}
+
+
 def parse_pihole(out):
     dns_ip, http_code, section = None, None, None
     for line in out.splitlines():
@@ -383,7 +402,8 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "backup_verify": parse_backup_verify,
            "guests": parse_guests, "grafana": parse_grafana,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
-           "wazuh": parse_wazuh, "page_auth": parse_page_auth}
+           "wazuh": parse_wazuh, "page_auth": parse_page_auth,
+           "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog}
 
 
 def classify(name, rc, out):
@@ -414,6 +434,16 @@ def classify(name, rc, out):
         return "OK" if "healthy" in low else "WARN"
     if name == "loki":
         return "OK" if rc == 0 and '"version"' in out else "WARN"
+    if name == "net_config_change":
+        # Informational: config-change count rides in metrics for the interpreter to
+        # reason about ("did the firewall/switch change?"). Never alarms the verdict.
+        return "OK"
+    if name == "net_syslog_flow":
+        # Dead-man: WARN if the network-syslog stream dried up (logging stopped).
+        if rc != 0:
+            return "WARN"
+        c = parse_netlog(out)["count"]
+        return "WARN" if (c is None or c < 10) else "OK"
     if name == "pihole":
         # OK when Pi-hole answers DNS (its core function).
         for line in out.splitlines():
