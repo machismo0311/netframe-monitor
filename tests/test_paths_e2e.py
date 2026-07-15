@@ -255,3 +255,7 @@ def _run_evidence(mod, stub_attr, out_name):
 
 def test_daily_carries_shared_evidence_section():
     _run_evidence("netframe_daily", "call_llm", "report-daily.md")
+
+
+def test_monthly_carries_shared_evidence_section():
+    _run_evidence("netframe_monthly", "narrate", "report-monthly.md")

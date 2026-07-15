@@ -17,6 +17,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import netframe_policy  # noqa: E402 - path first; the gate is mandatory
+import netframe_evidence  # noqa: E402 - shared evidence engine
 
 BASE = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
 HISTORY = f"{BASE}/history.jsonl"
@@ -132,6 +133,8 @@ def main():
         except Exception as e:  # noqa: BLE001 - report degraded, never crash the timer
             body = (f"## Posture this month\nLLM unavailable ({e}); raw 30d summary:\n\n"
                     f"```json\n{json.dumps(summary, indent=2)}\n```")
+    # Shared deterministic evidence + confidence per material finding (NF-AIOPS-005).
+    body += netframe_evidence.section_for_current_state(BASE)
     # Same deterministic gate as every other LLM->operator path (NF-AIOPS-004 safety phase).
     body, _ = netframe_policy.enforce(body, source="monthly")
     report = (f"# NetFRAME Monthly Maturity Report\n\n_Generated {now.isoformat()} by {MODEL} "
