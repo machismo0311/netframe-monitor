@@ -1,0 +1,15 @@
+[Unit]
+Description=NetFRAME monthly infrastructure-maturity report (72B deep pass)
+Documentation=file:/opt/netframe-monitor/netframe_monthly.py
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Nice=18
+Environment=NETFRAME_LLM_MODEL=qwen2.5:72b
+Environment=NETFRAME_LLM_TIMEOUT=900
+ExecStart=/usr/bin/python3 /opt/netframe-monitor/netframe_monthly.py
+TimeoutStartSec=1200
