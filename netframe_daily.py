@@ -15,6 +15,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import netframe_policy  # noqa: E402 - path first; the gate is mandatory
+import netframe_evidence  # noqa: E402 - shared evidence engine
 
 BASE = "/opt/netframe-monitor"
 HISTORY_FILE = f"{BASE}/history.jsonl"
@@ -39,7 +40,8 @@ SYSTEM_PROMPT = (
     "- 24h trends: metrics moving across the day (temps, disk %, pending/reallocated sectors), "
     "cite node + start->end numbers. Omit if none.\n"
     "- Fix before it breaks: prioritized, proactive. For the single most important item, give "
-    "a one-line Situation/Evidence/Confidence/Action. Otherwise short bullets.\n"
+    "a one-line Situation/Evidence/Action. Do NOT state a confidence: evidence quality and "
+    "confidence are computed deterministically by code and appended after your text.\n"
     "- Security: posture notes vs the standing tracker; do not re-flag Resolved/Risk-Accepted.\n\n"
     "Use the STANDING OPERATIONAL CONTEXT below (architecture, reliability/SPOFs, known issues "
     "+ recent changes): do NOT raise known SPOFs or accepted risks as novel; attribute symptoms "
@@ -145,6 +147,10 @@ def main():
         except Exception as e:  # noqa: BLE001 - report degraded, never crash the timer
             body = (f"## Day summary\nLLM unavailable ({e}); raw 24h summary follows.\n\n"
                     f"```json\n{json.dumps(summary, indent=2)}\n```")
+    # Shared deterministic evidence + confidence per material finding (NF-AIOPS-005).
+    # ONE engine for every path; annotation only, never suppression. Appended before the
+    # policy screen so the universal boundary covers it.
+    body += netframe_evidence.section_for_current_state(BASE)
     # Same deterministic gate as every other LLM->operator path. No report type gets a
     # weaker boundary than another (NF-AIOPS-004 safety phase).
     body, _ = netframe_policy.enforce(body, source="daily")
