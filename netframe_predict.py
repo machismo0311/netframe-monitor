@@ -15,7 +15,11 @@ and its timer. Intended cadence: weekly (via netframe-predict.timer)."""
 import datetime as dt
 import json
 import os
+import sys
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netframe_policy  # noqa: E402 - path first; the gate is mandatory
 
 BASE = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
 HISTORY = f"{BASE}/history.jsonl"
@@ -175,6 +179,12 @@ def main():
         summary = narrate(pred)
     except Exception as e:  # noqa: BLE001 - deterministic tables still ship
         summary = f"_(LLM narration unavailable: {e}; deterministic tables below.)_"
+    # Same deterministic gate as every other LLM->operator path. This one matters most of
+    # all: the predictive narration is ABOUT drive-failure risk, so it is the likeliest
+    # place in the whole system to produce an EVT-003 "replace the drive" recommendation
+    # off a benign pending-sector count. The deterministic tables below are unaffected -
+    # only the model's prose passes through here.
+    summary, _ = netframe_policy.enforce(summary, source="predict")
     report = (f"# NetFRAME Predictive Report (fix before it breaks)\n\n"
               f"_Generated {now.isoformat()} on Jarvis · {runs} runs / {DAYS}d window · "
               f"narration by {MODEL}_\n\n---\n\n## Fix before it breaks\n{summary}\n\n---\n\n{tables}\n")

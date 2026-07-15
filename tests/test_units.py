@@ -583,6 +583,8 @@ LLM_PATHS = {
     "netframe_daily": "daily",
     "netframe_monthly": "monthly",
     "netframe_chief": "chief",
+    "netframe_predict": "predict",
+    "netframe_ghreview": "ghreview",
 }
 
 
@@ -630,3 +632,25 @@ def test_enforce_fails_loud_not_closed(monkeypatch):
     assert "Some report body." in text
     assert "UNSCREENED" in text
     assert blocked == []
+
+
+def test_no_generation_path_escapes_the_gate():
+    """The denominator, computed from the source rather than from a list I maintain by
+    hand. Any module that calls the chat API and writes operator-visible prose must be
+    behind enforce(). This is what stops a NEW report type quietly acquiring no boundary -
+    the failure mode that left daily/monthly/chief/predict/ghreview open in the first place.
+    Embedding-only callers (retrieve) generate nothing; transports (console, transact)
+    delegate to a gated path.
+    """
+    import glob
+    TRANSPORTS = {"netframe_console", "netframe_transact"}
+    unprotected = []
+    for path in glob.glob(os.path.join(BASE, "netframe_*.py")):
+        mod = os.path.basename(path)[:-3]
+        src = open(path).read()
+        generates = "OLLAMA_URL" in src and "api/embeddings" not in src
+        if not generates or mod in TRANSPORTS:
+            continue
+        if "netframe_policy.enforce(" not in src:
+            unprotected.append(mod)
+    assert not unprotected, f"LLM generation paths with NO policy gate: {unprotected}"

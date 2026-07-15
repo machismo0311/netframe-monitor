@@ -22,9 +22,13 @@ Writes report-github.md + reports/github/<date>.md. Cadence: weekly timer.
 import datetime as dt
 import json
 import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netframe_policy  # noqa: E402 - path first; the gate is mandatory
 
 BASE = os.environ.get("NETFRAME_BASE", "/opt/netframe-monitor")
 TOKEN_FILE = f"{BASE}/github_token"
@@ -327,6 +331,12 @@ def main():
             recruiter = recruiter_review(rows) if rows else ""
         except Exception as e:  # noqa: BLE001
             recruiter = f"_Recruiter simulation unavailable ({e})._"
+        # Same deterministic gate as every other LLM->operator path. Lower risk than the
+        # infra reports (its subject is repositories, not hardware), but "lower risk" is
+        # not a reason for a different boundary: the whole defect was that some paths had
+        # a weaker one than others.
+        review, _ = netframe_policy.enforce(review, source="ghreview")
+        recruiter, _ = netframe_policy.enforce(recruiter, source="ghreview-recruiter")
         body = (f"**Portfolio health: {avg}/100** across {len(rows)} repo(s), {mode}.\n\n"
                 f"{table(rows)}\n\n---\n\n{review}\n\n---\n\n"
                 f"# Recruiter Simulation Mode\n\n{recruiter}")
