@@ -29,7 +29,7 @@
       "enforcement_point": "enforce(source=console) in answer(); action TAGS additionally sanitised by _guard_actions",
       "verified": "2026-07-15",
       "verified_by": "tests/test_paths_e2e.py",
-      "evidence_coverage": "not-yet (console answers are conversational, not material-finding reports; candidate follow-up)"
+      "evidence_coverage": "annotated (shared netframe_evidence: strip_model_confidence + section_for_current_state; confidence is code-computed not self-rated)"
     },
     {
       "component": "netframe_daily",
