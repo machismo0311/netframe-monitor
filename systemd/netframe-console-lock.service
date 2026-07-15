@@ -1,0 +1,13 @@
+[Unit]
+Description=NetFRAME console :8809 iptables lockdown (localhost + NPM only)
+Documentation=file:/opt/netframe-monitor/netframe-console-lock.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /opt/netframe-monitor/netframe-console-lock.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

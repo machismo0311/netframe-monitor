@@ -14,3 +14,7 @@ __pycache__/
 
 # Standing context is a copy of the (already-tracked) vault pentest doc
 context/
+
+# Console: generated retrieval index + conversation log (Jarvis-local)
+retrieval-index.json
+context/conversations.jsonl

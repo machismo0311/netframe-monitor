@@ -1,0 +1,13 @@
+[Unit]
+Description=NetFRAME console retrieval-index rebuild
+Documentation=file:/opt/netframe-monitor/netframe_retrieve.py
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Nice=15
+ExecStart=/usr/bin/python3 /opt/netframe-monitor/netframe_retrieve.py build
+TimeoutStartSec=600
