@@ -74,6 +74,52 @@ def test_llm_router_200_ok_502_warn():
     assert mon.classify("llm_router", 0, "") == "WARN"
 
 
+def test_transact_skip_is_not_a_failure_and_does_not_degrade_verdict():
+    # A skipped probe means "insufficient test conditions", not "unhealthy". If this ever
+    # returns WARN, every real GPU user would trigger a false alarm.
+    out = "probe=console attempted=NO reason=GPU busy (GPU utilisation 96%)"
+    assert mon.classify("console_transact", 0, out) == "SKIPPED"
+    # SKIPPED must rank alongside OK so it can never raise the overall verdict.
+    assert mon.VERDICT_RANK["SKIPPED"] == mon.VERDICT_RANK["OK"]
+    assert mon.VERDICT_RANK["SKIPPED"] < mon.VERDICT_RANK["WARN"]
+
+
+def test_transact_pass_and_fail():
+    ok = "probe=console attempted=YES result=PASS http=200 model=qwen2.5:7b elapsed_s=13"
+    bad = "probe=console attempted=YES result=FAIL http=500 elapsed_s=2"
+    assert mon.classify("console_transact", 0, ok) == "OK"
+    assert mon.classify("console_transact", 0, bad) == "WARN"
+
+
+def test_transact_skip_records_reason_and_no_false_verification():
+    out = "probe=console attempted=NO reason=Inference workload active (72B resident)"
+    d = mon.parse_transact(out)
+    assert d["attempted"] is False
+    assert d["reason"] == "Inference workload active (72B resident)"
+    # Tri-state: None means NOT TESTED. False would mean "verified broken".
+    assert d["functionally_verified"] is None
+
+
+def test_transact_skip_writes_no_history_metric():
+    # A skip must not land in history as a 0, or "not tested" becomes "failed" in trends.
+    skipped = {"monitoring": {"console_transact": {
+        "metrics": mon.parse_transact("probe=console attempted=NO reason=GPU busy")}}}
+    assert mon.flatten_metrics(skipped) == {}
+    ran = {"monitoring": {"console_transact": {"metrics": mon.parse_transact(
+        "probe=console attempted=YES result=PASS http=200 model=qwen2.5:7b elapsed_s=9")}}}
+    assert mon.flatten_metrics(ran) == {"monitoring.console_transact.verified": 1}
+
+
+def test_backend_probes_close_the_401_blind_spot():
+    # NPM applies auth_basic in nginx's access phase, before proxy_pass, so console_auth
+    # returns 401 (=OK) even with a dead backend. These probes must hit the backend
+    # directly and demand a real 200.
+    assert mon.classify("console_backend", 0, "HTTP 200") == "OK"
+    assert mon.classify("console_backend", 0, "HTTP 000") == "WARN"
+    assert mon.classify("report_backend", 0, "HTTP 502") == "WARN"
+    assert "8809" in mon.CONSOLE_BACKEND and "8808" in mon.REPORT_BACKEND
+
+
 def _knowledge():
     import importlib.util
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -186,3 +232,74 @@ if __name__ == "__main__":
             print(f"FAIL {name}: {e}")
     print(f"\n{len(fns) - failed}/{len(fns)} passed")
     raise SystemExit(1 if failed else 0)
+
+
+def _admission():
+    import importlib.util
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.environ["NETFRAME_BASE"] = here
+    spec = importlib.util.spec_from_file_location(
+        "adm", os.path.join(here, "netframe_admission.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_admission_no_gpu_visibility_fails_closed():
+    # If we cannot prove the GPU is idle, we do not spend it. A skipped probe is cheap;
+    # stealing the GPU from a live user is not.
+    adm = _admission()
+    adm.gpu_state = lambda: []
+    busy, reason = adm.gpu_busy()
+    assert busy is True
+    assert "unknown" in reason.lower()
+
+
+def test_admission_deep_model_resident_is_absolute_veto():
+    adm = _admission()
+    adm.resident_models = lambda: ["qwen2.5:72b"]
+    assert adm.deep_model_resident() is True
+    adm.resident_models = lambda: ["qwen2.5:7b"]
+    assert adm.deep_model_resident() is False
+
+
+def test_admission_reasons_match_the_approved_taxonomy():
+    adm = _admission()
+    adm.maintenance_window = lambda: True
+    d = adm.decide("console")
+    assert d["attempted"] is False and d["reason"] == "Maintenance window"
+
+    adm.maintenance_window = lambda: False
+    adm.due = lambda p: (True, "")
+    adm.resident_models = lambda: ["qwen2.5:72b"]
+    d = adm.decide("console")
+    assert d["attempted"] is False and "Inference workload active" in d["reason"]
+
+    adm.resident_models = lambda: []
+    adm.gpu_state = lambda: [(96, 47000)]
+    d = adm.decide("console")
+    assert d["attempted"] is False and "GPU busy" in d["reason"]
+
+    adm.gpu_state = lambda: [(0, 1)]
+    adm.interactive_recent = lambda: (True, "recent console conversation")
+    d = adm.decide("console")
+    assert d["attempted"] is False and "Interactive user request" in d["reason"]
+
+    adm.interactive_recent = lambda: (False, "")
+    assert adm.decide("console")["attempted"] is True
+
+
+def test_transact_refuses_deep_model_even_if_misconfigured():
+    # Defence in depth for the never-72B rule: refuse to send a deep model at all.
+    import importlib.util
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.environ["NETFRAME_BASE"] = here
+    os.environ["NETFRAME_CHAT_MODEL"] = "qwen2.5:72b"
+    spec = importlib.util.spec_from_file_location(
+        "tr", os.path.join(here, "netframe_transact.py"))
+    tr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tr)
+    r = tr.probe_console()
+    assert r["attempted"] == "NO"
+    assert "refusing" in r["reason"]
+    del os.environ["NETFRAME_CHAT_MODEL"]
