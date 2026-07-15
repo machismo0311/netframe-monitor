@@ -267,3 +267,53 @@ def test_chief_carries_shared_evidence_section():
 
 def test_predict_carries_shared_evidence_section():
     _run_evidence("netframe_predict", "narrate", "report-predict.md")
+
+
+def test_console_confidence_is_code_computed_not_model_written():
+    """NF-AIOPS-005 console: the model no longer rates its own confidence. If it writes one
+    anyway it is stripped, and the shared code-computed evidence section is appended for
+    material findings. Retriever + Ollama stubbed for determinism."""
+    import types
+    tmp = _sandbox()
+    try:
+        os.environ["NETFRAME_BASE"] = tmp
+        os.environ["NETFRAME_LOKI_PUSH"] = "http://127.0.0.1:1/disabled"
+        _fresh_modules()
+        sys.modules.pop("netframe_evidence", None)
+        # material finding in telemetry so the appended section has something to score
+        state = json.load(open(f"{tmp}/last_run.json"))
+        state["worst"] = "WARN"
+        state["nodes"]["jarvis"] = {"llm_router_conformance": {
+            "verdict": "WARN",
+            "metrics": {"config": "PASS", "runtime": "FAIL", "firewall": "PASS"},
+            "raw_excerpt": ""}}
+        json.dump(state, open(f"{tmp}/last_run.json", "w"))
+        fake_retrieve = types.ModuleType("netframe_retrieve")
+        fake_retrieve.retrieve = lambda q, k=8: [{"source": "stub", "text": "stub"}]
+        sys.modules["netframe_retrieve"] = fake_retrieve
+        m = _load("netframe_chat", tmp)
+
+        class _Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self):
+                # the model self-rates confidence, the exact habit we are removing
+                body = ("## Summary\nRouter has an issue.\n## Confidence\n95% - I am sure.\n"
+                        "## Recommendation\nRestart the unit.")
+                return json.dumps({"message": {"content": body}}).encode()
+        m.urllib.request.urlopen = lambda *a, **k: _Resp()
+
+        reply = m.answer("is the router ok?", "operator", False)["response"]
+        # the model's self-rated confidence is gone
+        assert "95% - I am sure" not in reply
+        assert "## Confidence\n95%" not in reply
+        # the model's actual content survives
+        assert "Router has an issue." in reply
+        # the SHARED code-computed section is appended, with the deterministic condition
+        assert "Evidence & confidence (deterministic" in reply
+        assert "runtime_bind_mismatch" in reply
+    finally:
+        sys.modules.pop("netframe_retrieve", None)
+        os.environ.pop("NETFRAME_BASE", None)
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)

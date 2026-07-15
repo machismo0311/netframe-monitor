@@ -34,6 +34,7 @@ OUTPUT: {evidence_quality, evidence_band, confidence, confidence_explanation,
          evidence_factors, freshness, provenance}. Every factor carries provenance.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -367,6 +368,27 @@ def section_for_state(state, coverage_days, requested_days=14):
                      f"{'  ⚠️ STALE' if a['freshness']['stale'] else ''}  \n"
                      f"  _{expl}_")
     return "\n".join(lines) + "\n"
+
+
+# A model-written confidence: a "## Confidence" section, or a stray "Confidence: N%" line.
+# The model must not rate its own correctness (owner requirement); code computes it. This
+# is the belt-and-suspenders guard for free-form paths (the console) where the model may
+# emit a confidence out of habit even when the prompt no longer asks for one - the reports
+# are structured enough to just drop it from the prompt, the interactive path is not.
+_CONF_SECTION_RE = re.compile(r"\n#{1,6}\s*confidence\b[^\n]*\n.*?(?=\n#{1,6}\s|\Z)",
+                              re.IGNORECASE | re.DOTALL)
+_CONF_LINE_RE = re.compile(r"(?im)^[ \t]*\**\s*confidence\s*\**\s*[:\-][^\n]*\n?")
+
+
+def strip_model_confidence(text):
+    """Remove any model-written confidence section/line, so the only confidence an operator
+    sees is the code-computed one from section_for_state(). Deterministic; no model."""
+    if not text:
+        return text
+    text = _CONF_SECTION_RE.sub("\n", text)
+    text = _CONF_LINE_RE.sub("", text)
+    # collapse a run of blank lines the removal may leave behind
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def section_for_current_state(base=None):
