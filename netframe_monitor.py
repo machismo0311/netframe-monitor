@@ -31,7 +31,8 @@ BASE = "/opt/netframe-monitor"
 KEY = f"{BASE}/monitor_key"
 STATE_FILE = f"{BASE}/last_run.json"
 HISTORY_FILE = f"{BASE}/history.jsonl"
-HISTORY_CAP = 300  # keep the most recent N runs for trend context
+HISTORY_CAP = 3400  # ~35 days at the 15-min cadence, so the 14d predict and 30d
+                    # monthly windows are actually populated; a few MB at most
 
 CHECK_TIMEOUT = 120  # Randy's SMART sweep over 50+ SAS disks is the slow path
 RAW_EXCERPT = 1200   # chars of raw output kept per check in last_run.json

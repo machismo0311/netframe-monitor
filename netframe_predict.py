@@ -30,10 +30,14 @@ CAP_THRESHOLD = 90.0
 
 
 def load_series():
-    """Return {metric_key: [(t_days_from_start, value), ...]} over the last DAYS."""
+    """Return ({metric_key: [(t_days_from_start, value), ...]}, runs, coverage_days)
+    over the last DAYS. coverage_days is how much of that window the retained
+    history actually spans, so the report can state a shortfall instead of
+    silently trending over less data than it claims."""
     if not os.path.exists(HISTORY):
-        return {}, 0
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=DAYS)
+        return {}, 0, 0.0
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(days=DAYS)
     rows = []
     with open(HISTORY) as fh:
         for line in fh:
@@ -48,7 +52,8 @@ def load_series():
             except (ValueError, KeyError):
                 continue
     if not rows:
-        return {}, 0
+        return {}, 0, 0.0
+    coverage = round((now - rows[0][0]).total_seconds() / 86400.0, 1)
     t0 = rows[0][0]
     series = {}
     for t, metrics in rows:
@@ -58,7 +63,7 @@ def load_series():
                 series.setdefault(k, []).append((td, float(v)))
             except (TypeError, ValueError):
                 continue
-    return series, len(rows)
+    return series, len(rows), coverage
 
 
 def linreg(points):
@@ -102,8 +107,11 @@ def analyze(series):
     return {"drives": drives, "capacity": capacity}
 
 
-def det_tables(pred, runs):
+def det_tables(pred, runs, coverage):
     L = [f"_Deterministic trends over the last {DAYS} days ({runs} runs)._\n"]
+    if coverage and coverage + 0.5 < DAYS:
+        L.append(f"**Window shortfall:** retained history spans only {coverage}d of the "
+                 f"requested {DAYS}d; slopes reflect the shorter span and are less certain.\n")
     L.append("## Drive-failure risk (pending / reallocated sectors)")
     if pred["drives"]:
         L.append("| Node | Metric | Current | Slope/day | Risk |")
@@ -159,10 +167,10 @@ def narrate(pred):
 
 
 def main():
-    series, runs = load_series()
+    series, runs, coverage = load_series()
     pred = analyze(series)
     now = dt.datetime.now(dt.timezone.utc)
-    tables = det_tables(pred, runs)
+    tables = det_tables(pred, runs, coverage)
     try:
         summary = narrate(pred)
     except Exception as e:  # noqa: BLE001 - deterministic tables still ship
