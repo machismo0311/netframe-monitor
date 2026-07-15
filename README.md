@@ -9,6 +9,12 @@ web report.
 > `/opt/netframe-monitor/` on Jarvis. **Secrets and state are intentionally not in
 > this repo** — see [Not included](#not-included-generated--secret).
 
+## Documentation
+
+- **[Session Build Report (2026-07-15)](docs/SESSION-BUILD-REPORT-2026-07-15.md)** — comprehensive account of the AI-Ops trustworthiness program: every issue → root cause → remedy (13 issues), the guardrails installed, the bugs the tooling caught before they shipped, the NF-AIOPS-004/005 phases, a full PR index, open follow-ups, and the end-of-session risk register.
+- **[Disaster Recovery](docs/DISASTER-RECOVERY.md)** — rebuild-after-total-loss runbook (RTO/RPO, self-service restic restore).
+- A **sanitized public edition** of the build report lives in the Home-Lab repo: [AI-Ops trustworthiness case study](https://github.com/machismo0311/Home-Lab/blob/main/docs/aiops-trustworthiness-case-study-2026-07-15.md).
+
 ## Components
 
 | File | Deployed to | Role |
