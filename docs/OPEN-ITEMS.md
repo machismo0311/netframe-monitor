@@ -106,6 +106,11 @@ _Last full reconcile: 2026-07-15._
 
 ## Recently closed (this session)
 
+Student-onboarding doc drift fixed (Home-Lab #20): student-guide README rewritten off
+the dead Headscale plan, quickstart (vault + mirror + /data/shared on-box) now routes
+via the Cloudflare tunnel instead of the LAN IP, VS Code Remote-SSH warning added to
+the student guide (sshd forwarding is off for students), both PDFs recompiled; guide
+flow dry-run end-to-end (tunnel SSH -> sbatch job COMPLETED on the RTX 8000).
 Console evidence integration + auto-restart hook; NPM/Pi-hole DNS-record audit check;
 hardening drift detection; NPM admin password rotation; OPNsense egress-observe key
 rotation+scoping; pve1 hardening (into the Ansible fleet + drift-check). Stale "open" notes confirmed DONE: Ansible hardening rollout, pve5 bogus
