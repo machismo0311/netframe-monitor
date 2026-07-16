@@ -66,7 +66,7 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
-| **Config-drift: cover service env files** | `OPEN` | `netframe_confdrift` fingerprints interfaces/sshd/sysctl but NOT env files like `/etc/llm_router.env` - the 2026-07-14 outage was env drift it would not have caught. |
+| **Collector: no UNREACHABLE verdict for a down node** | `OPEN` | Found during the 2026-07-16 pve3 outage: `classify()` has no node-unreachable concept, so a hard-down node (ssh rc=255 "No route to host") shows `journal_errors=OK`, `smart=OK`, others WARN - a dead node's SMART reads healthy. Wants an explicit per-node UNREACHABLE verdict (rc=255 + connect-error text) so the interpreter and Discord alerts say "node down", not scattered WARNs. |
 | **QuarkyLab student-env Phase 03 packages** | `OPEN` | Add the researcher's specific physics packages to the container def (needs owner input). |
 | Evidence-scoring weight recalibration | `PASSIVE` | Revisit only if a real incident shows the numbers are off. |
 | llm_router / Open WebUI policy boundary | `PASSIVE` | Deliberately out of the boundary; revisit only if they gain tool-calling. |
@@ -109,6 +109,15 @@ _Last full reconcile: 2026-07-15._
 ---
 
 ## Recently closed (this session)
+
+**Config-drift env-file coverage (PR #62, 2026-07-16):** new `env` fingerprint category
+on all nodes - every `EnvironmentFile=` referenced from `/etc/systemd/system/*.service`
+plus `/etc/*.env`, hashed as name:content-hash lines (a root-only file appearing on a
+remote node still drifts by name; Jarvis, which holds the custom service env files,
+runs the check as root so content coverage is full there). Deployed, baseline
+re-blessed, canary live-fire verified (new `/etc/*.env` -> DRIFTED -> clean). Also
+hardened baselines against outages: `set-baseline` now merges over the previous
+baseline (a bless while a node is down no longer wipes it or crashes the next check).
 
 Student-onboarding doc drift fixed (Home-Lab #20): student-guide README rewritten off
 the dead Headscale plan, quickstart (vault + mirror + /data/shared on-box) now routes
