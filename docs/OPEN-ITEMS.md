@@ -86,6 +86,9 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
+| **Home Assistant: onboarding** | `OPEN` | HAOS 18.1 VM 110 on pve5 installed 2026-07-16 (http://homeassistant.netframe.local:8123, .153). First visit creates the OWNER account - do it soon (unclaimed instance) and file creds in Vaultwarden. Runbook: `Home-Lab/vault/Runbook/Home-Assistant-Install-2026-07-16.md`. |
+| **Home Assistant: OPNsense DHCP static mapping** | `OPEN` | Map MAC `BC:24:11:27:B2:5C` -> 192.168.10.153 (GUI - our API key is read-only) so the Pi-hole DNS record can't drift on lease change. |
+| **Home Assistant: future add-ons / IoT VLAN 40** | `PASSIVE` | Mosquitto/ESPHome/Zigbee2MQTT as hardware arrives (Zigbee stick -> USB passthrough on pve5); when first IoT devices land on VLAN 40, add OPNsense HA(.153)->VLAN40 rules + mDNS strategy. Details in the install runbook. |
 | **VoIP** | `OPEN` | FreePBX + 5x Cisco CP-8841 phones (deferred, post core infra). |
 | **Cyberpunk monitoring dashboard** | `OPEN` | Live API integration for the wall dashboard. |
 | **CCNA study cadence** | `OPEN` | Personal/study item (owner). |
