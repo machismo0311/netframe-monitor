@@ -24,16 +24,27 @@ _Last full reconcile: 2026-07-15._
 | **OPNsense CARP HA pair** | `OPEN` | Removes the top-ranked SPOF (OPNsense = 1 VM on pve2). Part of the HA roadmap. |
 | **DAC 10G uplink -> fiber** | `OPEN` | `xe-0/2/3 -> UniFi SFP2`: replace the DAC with fiber optics. |
 
-## Headscale / STUDENT REMOTE ACCESS (the actual goal - roadmap gap)
+## Headscale / STUDENT REMOTE ACCESS
 
-> **KEY FINDING 2026-07-15:** Headscale's stated purpose was STUDENT remote login to QuarkyLab SLURM, but the 'phases' only cover infra/admin migration. Live state: 0 student users, 0 student devices, NO student access path exists. Kyle + Fernanda work (done). **Real DECISION needed (drives the work): how do students connect?** (1) per-device Headscale + `student` user + preauth key + ACL to SLURM login only; (2) hardened internet-facing SSH bastion into SLURM; (3) web (Open OnDemand / shell-in-browser). Phase 2/4 are polish vs this. AWAITING OWNER DECISION on the access model.
-
+> **CORRECTION 2026-07-15 (retracts the earlier "KEY FINDING"):** the student access
+> model was ALREADY DECIDED AND BUILT 2026-07-06 - **Cloudflare Tunnel**, not Headscale.
+> `cloudflared` on QuarkyLab (active+enabled, tunnel `quarkylab`) publishes SSH at
+> `quarkylab.kylemason.org`; students/researchers install cloudflared locally and SSH
+> with a per-account key (`add-cluster-key.sh studentNN`). Headscale is deliberately
+> **internal admin mesh only** - exposing it off-LAN was explicitly vetoed in
+> `Home-Lab/vault/Runbook/QuarkyLab-Cloudflare-Access.md`; user docs:
+> `QuarkyLab-Researcher-Access.md` + `QuarkyLab-Student-Quickstart.md` + `QuarkyLab-Account-Onboarding.md`.
+> **Re-verified end-to-end 2026-07-15** (SSH through the tunnel from Ares succeeded).
+> The earlier finding ("no student access path exists, decision needed") was wrong - it
+> missed these runbooks. Remaining real gaps are below.
 
 | Item | Status | Notes |
 |---|---|---|
+| **Cloudflare Access layer (email gate)** | `OPEN` | Tunnel endpoint is currently gated by SSH keys ONLY. Access (Zero-Trust free tier, 50 users, email OTP) is designed in the runbook but needs the manual Zero-Trust signup (team name + payment method on file). Adds a second independent gate before port 22. |
+| **Onboard first actual students** | `OPEN` | Path is ready: collect pubkey -> `add-cluster-key.sh studentNN` -> send them `QuarkyLab-Researcher-Access.md` steps (user `studentNN`). 0 student keys loaded so far. Blocked only on Kyle having students to onboard. |
 | **Phase 2: Ares MagicDNS fix** | `LOW-VALUE POLISH` | Admin convenience only (hostnames over tailnet on Kyle's own workstation); NOT on the student path. Deprioritise. |
-| **Phase 3: device migration** | `VERIFY (mostly DONE)` | 2026-07-15 live check: 9 nodes on Headscale incl QuarkyLab (node 7) + Fernanda's machine (node 9, FUS22-009897, `fernanda` user). Only 2 users: kyle, fernanda. Kyle + Fernanda are migrated = Phase 3 effectively done for the researcher. |
-| **Phase 4: CT 105 -> VLAN 30** | `OPEN` | Move the Headscale container to VLAN 30, update login-server URLs. |
+| **Phase 3: device migration** | `VERIFY (mostly DONE)` | 2026-07-15 live check: 9 nodes on Headscale incl QuarkyLab (node 7) + Fernanda's machine (node 9, FUS22-009897, `fernanda` user). Only 2 users: kyle, fernanda. Kyle + Fernanda are migrated = Phase 3 effectively done for the researcher. Note Fernanda's node is offline since 2026-07-06 (expected off-LAN: Headscale control plane is LAN-only by design; she reaches QuarkyLab via the Cloudflare tunnel like everyone else remote). |
+| **Phase 4: CT 105 -> VLAN 30** | `OPEN` | Move the Headscale container to VLAN 30, update login-server URLs. Internal-only change; not on the student path. |
 
 ## High Availability roadmap (big, references vault `High Availability MOC`)
 
