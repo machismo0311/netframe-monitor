@@ -55,7 +55,7 @@ _Last full reconcile: 2026-07-15._
 | **Compute HA** | `OPEN` | `ha-manager` + Ceph or ZFS replication for VM/CT failover. |
 | **Storage redundancy** | `OPEN` | Randy is a single storage node (SPOF #2). |
 | **EX3400 switch Virtual Chassis** | `OPEN` | Switch-level redundancy. |
-| **RKE2: root-cause the failover failure + deliberate failover test** | `OPEN` | 2026-07-16: losing cp1 crash-looped rke2-server on BOTH survivors (~2000x/12h, startup fatal instead of waiting for etcd quorum; zombie shims) - the HA CP was not HA in practice. Recovery = stop + rke2-killall.sh + simultaneous restart (works, in the pve3 runbook addendum). Once cp1 is back: root-cause (rke2 v1.35.6 known issue? config?), then a planned single-node-loss test to prove failover actually works. |
+| **RKE2: root-cause the failover failure + deliberate failover test** | `OPEN` | 2026-07-16: losing cp1 crash-looped rke2-server on BOTH survivors (~2000x/12h, startup fatal instead of waiting for etcd quorum; zombie shims) - the HA CP was not HA in practice. Recovery = stop + rke2-killall.sh + simultaneous restart (works, in the pve3 runbook addendum). ROOT CAUSE CONFIRMED same evening (journals): the 12:48-12:52 UTC PBS restores onto pve4 IO-starved rke2-cp2's disk (same thin pool) -> 2-member etcd leaderless -> both survivors fatal-exited on lost leases at 12:56:00 -> containerd-zombie restart deadlock. Remaining work once cp1 is back: planned failover test (repro = IO-stall a CP disk with one member down) + consider restore --bwlimit policy and etcd IO isolation. |
 
 ## Security
 
