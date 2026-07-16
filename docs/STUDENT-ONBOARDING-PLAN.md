@@ -123,6 +123,29 @@ student leaves / semester ends -> roster row flipped to left -> playbook run
 
 ---
 
+## Bulletproofing (Kyle asked for these 2026-07-15, fold into the phases at build time)
+
+- [ ] **B.1 Quarantine before wipe:** offboard = revoke key + kill sessions NOW; the
+      home/scratch wipe runs after a grace period (~14 days) via a dated marker file
+      + timer or a second playbook pass. Students always ask for files after finals.
+- [ ] **B.2 Permanent canary student:** reserve one slot (e.g. `student20`) for
+      monitoring - a daily timer does a real tunnel login + tiny sbatch job and
+      alerts on failure, so a broken student path is an alert, not 20 confused
+      students. Integrate with netframe_monitor.
+- [ ] **B.3 Roster lint gate:** playbook refuses to run unless the roster validates -
+      pubkeys parse, NO duplicate pubkeys across users, no duplicate slots, unique
+      emails, active count <= 20, semester ID matches an expected var.
+- [ ] **B.4 Tunnel = SPOF, monitor it:** netframe_monitor service check + Grafana
+      alert on the `cloudflared` unit on QuarkyLab (single ingress for the class).
+      Canary (B.2) covers end-to-end; this covers fast detection.
+- [ ] **B.5 Enable Cloudflare Access BEFORE the semester** (the Zero-Trust signup +
+      card is the only external dependency; don't do it the week students arrive).
+- [ ] **B.6 Restore drill in the semester-close checklist:** after the end-of-class
+      wipe, restore one wiped home from PBS and diff it - keeps the B.1 grace-period
+      promise honest (pattern: the 2026-07-02 fernanda restore drill).
+- [ ] **B.7 Audit for free:** the roster lives in git, so every onboard/offboard has
+      a commit trail; tag the repo at semester close (`2026-fall-end`).
+
 **Definition of done:** Kyle's only per-student actions all semester are (1) paste a
 returned info blob into the roster and (2) run one command (or let a timer run it).
 Everything else - keys, welcome messages, revocation, wipes, alerts, Access seats -
