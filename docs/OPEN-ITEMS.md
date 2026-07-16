@@ -55,6 +55,7 @@ _Last full reconcile: 2026-07-15._
 | **Compute HA** | `OPEN` | `ha-manager` + Ceph or ZFS replication for VM/CT failover. |
 | **Storage redundancy** | `OPEN` | Randy is a single storage node (SPOF #2). |
 | **EX3400 switch Virtual Chassis** | `OPEN` | Switch-level redundancy. |
+| **RKE2: root-cause the failover failure + deliberate failover test** | `OPEN` | 2026-07-16: losing cp1 crash-looped rke2-server on BOTH survivors (~2000x/12h, startup fatal instead of waiting for etcd quorum; zombie shims) - the HA CP was not HA in practice. Recovery = stop + rke2-killall.sh + simultaneous restart (works, in the pve3 runbook addendum). Once cp1 is back: root-cause (rke2 v1.35.6 known issue? config?), then a planned single-node-loss test to prove failover actually works. |
 
 ## Security
 
