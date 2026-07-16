@@ -45,8 +45,7 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
-| **VLAN 1 egress lockdown - enforcing** | `OPEN` | Phase 1 (log-only observe) deployed 2026-07-11 via rw API; enforcing rules NOT yet applied. Verified 2026-07-15. |
-| **pve1 (Mac Mini) hardening** | `OPEN` | No `10-hardening.conf` drop-in (verified 2026-07-15); pve1 was outside the Ansible hardening fleet. |
+| **VLAN 1 egress lockdown - enforcing** | `OPEN` (deliberately deferred) | Phase 1 (infra-scoped, log-only observe) is deployed and healthy (catch-all 0 hits, verified 2026-07-15). NOT rushed to enforce - owner chose to wait 2026-07-14, and there are real prereqs. **Enforce-phase plan (GUI, since the egress API key is now read-only):** (1) DHCP-reserve Ares .199/.100 so the exemption can't drift; (2) add multicast/broadcast pass (224.0.0.0/4, 239.0.0.0/8, 255.255.255.255) or UniFi .2 discovery gets blocked/noisy; (3) decide whether to exclude network gear .2/.50/.176 (legit phone-home); (4) add CDN ranges for RKE2 image pulls + switch Mist; (5) consider IPv6 egress (v4-only so far); (6) then flip rule 940 `c7fed07f` action pass->block (keep log). Rollback: set 940 back to pass. See `project-security-vlan-segmentation` memory. |
 
 ## AI-Ops / monitoring
 
@@ -95,7 +94,7 @@ _Last full reconcile: 2026-07-15._
 
 Console evidence integration + auto-restart hook; NPM/Pi-hole DNS-record audit check;
 hardening drift detection; NPM admin password rotation; OPNsense egress-observe key
-rotation+scoping. Stale "open" notes confirmed DONE: Ansible hardening rollout, pve5 bogus
+rotation+scoping; pve1 hardening (into the Ansible fleet + drift-check). Stale "open" notes confirmed DONE: Ansible hardening rollout, pve5 bogus
 gateway, OPNsense backup key scoping, Pi-hole password (unified + vaulted). Full AI-Ops
 program: `docs/SESSION-BUILD-REPORT-2026-07-15.md`.
 
