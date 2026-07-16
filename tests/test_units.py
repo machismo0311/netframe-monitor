@@ -864,3 +864,54 @@ def test_confdrift_check_survives_none_poisoned_baseline(tmp_path, monkeypatch):
     # pve3's null baseline means it is unmonitored until re-blessed, never a crash
     # or a false drift; jarvis matches its baseline.
     assert "DRIFTED" not in report
+
+
+# ---- UNREACHABLE: a dead node must say so, never read as healthy ----
+
+def test_unreachable_no_route():
+    out = "ssh: connect to host 192.168.10.201 port 22: No route to host"
+    for check in ("df", "journal_errors", "smart", "guests", "prometheus", "npm_dns"):
+        assert mon.classify(check, 255, out) == "UNREACHABLE", check
+
+
+def test_unreachable_variants():
+    for msg in ("Connection timed out", "Connection refused",
+                "Network is unreachable", "Could not resolve hostname pve3"):
+        out = f"ssh: connect to host 192.168.10.201 port 22: {msg}"
+        assert mon.classify("df", 255, out) == "UNREACHABLE", msg
+
+
+def test_unreachable_not_spoofed_by_journal_text():
+    # connect-error text INSIDE journal output (rc 0, timestamped lines) must not
+    # flip the verdict - only ssh's own line-start "ssh:" counts.
+    out = "Jul 16 06:55:03 pve4 kernel: eth0: No route to host during probe"
+    assert mon.classify("journal_errors", 0, out) == "OK"
+    assert mon.classify("journal_errors", 255, out) == "OK"  # rc255 but not ssh's line
+
+
+def test_unreachable_does_not_mask_authfail():
+    assert mon.classify("df", 255, "Permission denied (publickey).") == "AUTH-FAIL"
+
+
+def test_unreachable_rank_is_infrastructure_severity():
+    assert mon.VERDICT_RANK["UNREACHABLE"] == mon.VERDICT_RANK["TIMEOUT"]
+
+
+# ---- netframe_alert: transition-only, deterministic ----
+
+def test_alert_compute_down_requires_all_checks_unreachable():
+    al = _load("netframe_alert")
+    report = {"nodes": {
+        "pve3": {"df": {"verdict": "UNREACHABLE"}, "smart": {"verdict": "UNREACHABLE"}},
+        "pve4": {"df": {"verdict": "UNREACHABLE"}, "smart": {"verdict": "OK"}},
+        "pve5": {"df": {"verdict": "OK"}},
+        "empty": {},
+    }}
+    assert al.compute_down(report) == ["pve3"]  # partial or empty never counts
+
+
+def test_alert_diff_fires_only_on_transitions():
+    al = _load("netframe_alert")
+    assert al.diff_state([], ["pve3"]) == (["pve3"], [])      # went down -> alert
+    assert al.diff_state(["pve3"], ["pve3"]) == ([], [])      # still down -> silent
+    assert al.diff_state(["pve3"], []) == ([], ["pve3"])      # recovered -> alert
