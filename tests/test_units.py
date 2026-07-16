@@ -811,3 +811,26 @@ def test_npm_dns_wrapper_emits_no_secrets():
     code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
     for bad in ("password", "secret", "token", "api_key", "credential"):
         assert bad not in code.lower(), f"wrapper code references {bad!r}"
+
+
+def test_hardening_drift_ok_warn_stale_missing():
+    import time as _t
+    fresh = _t.time()
+    clean = json.dumps({"generated_epoch": fresh, "any_drift": False,
+                        "drifted_nodes": "", "nodes": {"pve3": {}, "randy": {}}})
+    drift = json.dumps({"generated_epoch": fresh, "any_drift": True,
+                        "drifted_nodes": "pve4 pve5", "nodes": {"pve4": {}}})
+    stale = json.dumps({"generated_epoch": 1, "any_drift": False,
+                        "drifted_nodes": "", "nodes": {}})
+    assert mon.classify("hardening_drift", 0, clean) == "OK"
+    assert mon.classify("hardening_drift", 0, drift) == "WARN"
+    assert mon.parse_hardening_drift(drift)["drifted_nodes"] == ["pve4", "pve5"]
+    assert mon.classify("hardening_drift", 0, stale) == "WARN"   # dead cron
+    assert mon.classify("hardening_drift", 0, "") == "WARN"      # report missing
+
+
+def test_hardening_drift_reuses_generated_epoch_freshness():
+    # A report with no epoch cannot be trusted fresh -> stale -> WARN.
+    no_epoch = json.dumps({"any_drift": False, "drifted_nodes": "", "nodes": {"pve3": {}}})
+    assert mon.parse_hardening_drift(no_epoch)["stale"] is True
+    assert mon.classify("hardening_drift", 0, no_epoch) == "WARN"

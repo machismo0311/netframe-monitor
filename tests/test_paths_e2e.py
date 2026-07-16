@@ -60,13 +60,18 @@ def _sandbox():
     tmp = tempfile.mkdtemp()
     os.makedirs(f"{tmp}/context", exist_ok=True)
     os.makedirs(f"{tmp}/web", exist_ok=True)
+    # Timestamp relative to now, not a hardcoded date: the daily path only summarises the
+    # last 24h, so a fixed past date ages out of the window and the model stub is never
+    # called (this fixture silently broke at the first UTC midnight after 2026-07-15).
+    import datetime as _dt
+    ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1)).isoformat()
     # Benign telemetry: no SMART failure -> drive replacement is unevidenced -> must block.
-    json.dump({"started": "2026-07-15T00:00:00+00:00", "worst": "OK",
+    json.dump({"started": ts, "worst": "OK",
                "nodes": {"randy": {"smart": {"verdict": "OK", "raw_excerpt":
                          "SMART overall-health self-assessment test result: PASSED"}}}},
               open(f"{tmp}/last_run.json", "w"))
     open(f"{tmp}/history.jsonl", "w").write(json.dumps(
-        {"ts": "2026-07-15T00:00:00+00:00", "worst": "OK", "verdicts": {"randy": "OK"},
+        {"ts": ts, "worst": "OK", "verdicts": {"randy": "OK"},
          "metrics": {"randy.df.max_use_pct": 41}}) + "\n")
     return tmp
 

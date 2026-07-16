@@ -56,6 +56,10 @@ PBS = "sudo -n /usr/sbin/proxmox-backup-manager datastore list"
 # as a stale report (WARN) instead of silently going unnoticed.
 BACKUP_VERIFY = "cat /var/log/netframe-monitor/backup-report.json 2>/dev/null"
 BACKUP_VERIFY_MAX_AGE_H = 26  # written ~06:00 daily; older => stale
+# Hardening drift report (world-readable JSON emitted by the daily Ares drift-check that
+# runs the hardening role in --check mode). Unprivileged cat, same pattern as backup_verify.
+HARDENING_DRIFT = "cat /var/log/netframe-monitor/hardening-drift.json 2>/dev/null"
+HARDENING_DRIFT_MAX_AGE_H = 30  # daily cron; older => stale (dead cron / control node down)
 GPU = (
     "/usr/bin/nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,"
     "memory.used,memory.total --format=csv,noheader,nounits"
@@ -165,7 +169,7 @@ VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2}
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU, "llm_router_conformance": LLM_ROUTER_CONFORMANCE}},
-    "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY}},
+    "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY, "hardening_drift": HARDENING_DRIFT}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS, "npm_dns": NPM_DNS}},
@@ -342,6 +346,23 @@ def _backup_verify_age_h(data):
     return round((datetime.now(timezone.utc).timestamp() - gen) / 3600, 1)
 
 
+def parse_hardening_drift(out):
+    """Parse the hardening drift report (same JSON-cat pattern as backup_verify). Reports
+    whether any node drifted from the hardened baseline, and the report's own age."""
+    data = _backup_verify_load(out)  # generic JSON loader (None if absent/unreadable)
+    if data is None:
+        return {"present": False}
+    age_h = _backup_verify_age_h(data)  # reuses generated_epoch age logic
+    drifted = data.get("drifted_nodes", "").strip()
+    return {"present": True,
+            "any_drift": bool(data.get("any_drift")),
+            "drifted_nodes": [n for n in drifted.split() if n],
+            "node_count": len(data.get("nodes", {})),
+            "generated": data.get("generated"),
+            "age_hours": age_h,
+            "stale": age_h is None or age_h > HARDENING_DRIFT_MAX_AGE_H}
+
+
 def parse_backup_verify(out):
     data = _backup_verify_load(out)
     if data is None:
@@ -502,6 +523,7 @@ def parse_wazuh(out):
 PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
            "backup_verify": parse_backup_verify,
+           "hardening_drift": parse_hardening_drift,
            "guests": parse_guests, "grafana": parse_grafana,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
            "wazuh": parse_wazuh, "page_auth": parse_page_auth,
@@ -614,6 +636,13 @@ def classify(name, rc, out):
         if age_h is None or age_h > BACKUP_VERIFY_MAX_AGE_H:
             return "WARN"  # stale report => dead cron/timer on Ares
         return "OK" if data.get("overall") == "pass" else "WARN"
+    if name == "hardening_drift":
+        d = parse_hardening_drift(out)
+        if not d.get("present"):
+            return "WARN"        # report missing / unreadable
+        if d.get("stale"):
+            return "WARN"        # stale => the daily drift-check cron stopped
+        return "WARN" if d.get("any_drift") else "OK"
     if name == "smart":
         if "self-assessment test result: failed" in low or "failing_now" in low or "smart health status: fail" in low:
             return "WARN"
