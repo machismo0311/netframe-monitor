@@ -1,60 +1,107 @@
 # NetFRAME Open Items / Roadmap
 
-**Purpose:** single source of truth for outstanding work, replacing scattered notes that
-went stale. Each item carries a **verified status** as of the date shown, so this list can
-be trusted rather than second-guessed. Private repo by design: several items name current
-security gaps.
+**This is the single source of truth for outstanding work.** When "what's next?" is asked,
+it references this file. New todo items get committed here. It consolidates what used to be
+scattered across: memory notes, the Home-Lab README "Planned" list, the Obsidian
+`00 - Homelab MOC.md` roadmap, individual runbook checklists, and the assessment docs.
 
-**Status legend:** `OPEN` (verified still open) · `VERIFY` (probably done, confirm before
-acting) · `PARKED` (deliberate defer, nothing at risk) · `PASSIVE` (act only if
-circumstances change).
+Each item has a **verified status** as of the date shown, so the list can be trusted.
+Private repo by design: some items name current security gaps.
 
-_Last verified: 2026-07-15._
+**Status:** `OPEN` (verified open) · `IN-PROGRESS` (started, steps remain) · `VERIFY`
+(probably done, confirm first) · `PARKED` (deliberate defer) · `PASSIVE` (act only if
+things change).
+
+_Last full reconcile: 2026-07-15._
 
 ---
 
-## Genuinely open (actionable)
+## Network & connectivity
 
-| # | Item | Status | Notes |
-|---|---|---|---|
-| 1 | **VLAN 1 egress lockdown - enforcing phase** | `OPEN` | Phase 1 (log-only observe) deployed 2026-07-11 via the rw API; the enforcing rules are NOT yet applied. Verified 2026-07-15. See `project-security-vlan-segmentation` memory. |
-| 2 | **pve1 (Mac Mini) hardening** | `OPEN` | No `10-hardening.conf` drop-in present (verified 2026-07-15). pve1 is the standalone Pi-hole/Homepage host; it was outside the Ansible hardening fleet. |
-| 3 | **Config-drift: cover service env files** | `OPEN` | `netframe_confdrift` fingerprints interfaces/sshd/sysctl but NOT env files like `/etc/llm_router.env`. The 2026-07-14 llm_router outage was env drift it would not have caught. Closing this prevents a recurrence at the source. |
-| 4 | **QuarkyLab student-env Phase 03 packages** | `OPEN` | Add Fernanda's specific physics packages to the container definition (needs owner input on which). |
+| Item | Status | Notes |
+|---|---|---|
+| **WAN failover - FirstNet 5G (MR7400)** | `IN-PROGRESS` | Multi-step implementation checklist in `Home-Lab/vault/Runbook/WAN-Failover-FirstNet-MR7400-Plan-2026-07-12.md` (remove legacy .1.1 VIP, cable MR7400 to nic2, pve2 vmbr2, OPNsense WAN2 failover group, test, WAN2-down Grafana alert). The #1 SPOF (single WAN) reducer. |
+| **OPNsense CARP HA pair** | `OPEN` | Removes the top-ranked SPOF (OPNsense = 1 VM on pve2). Part of the HA roadmap. |
+| **DAC 10G uplink -> fiber** | `OPEN` | `xe-0/2/3 -> UniFi SFP2`: replace the DAC with fiber optics. |
 
-## Verify before acting (likely already done - stale notes)
+## Headscale (migrate off commercial Tailscale)
 
-| # | Item | Status | Notes |
-|---|---|---|---|
-| 5 | **Headscale Phase 2 (QuarkyLab migration)** | `VERIFY` | Memory says "still on commercial Tailscale," but QuarkyLab shows a Headscale-range IP `100.64.0.7` (2026-07-15) - looks migrated. Confirm the control plane, then close. Note: migration was meant to move with Fernanda's Mac in lockstep. |
-| 6 | **pve5 corosync / resolv.conf permanent fix** | `VERIFY` | An old unchecked task ("fix corosync SSH to MagicDNS via interfaces"). Current state is healthy: resolv.conf uses Pi-hole `.177`/`.1`, corosync up on knet (node id 2), cluster quorate 7/7. Likely resolved; confirm and close. |
+| Item | Status | Notes |
+|---|---|---|
+| **Phase 2: Ares MagicDNS resolv.conf fix** | `OPEN` | `/etc/resolv.conf` permission error blocks MagicDNS on Ares. |
+| **Phase 3: migrate Kyle + researcher devices** | `VERIFY` | Off commercial Tailscale. NOTE: QuarkyLab shows a Headscale-range IP (100.64.0.7, 2026-07-15) so some device migration is already done - confirm exactly which devices remain on commercial Tailscale before working this. Researcher's Mac must migrate in lockstep. |
+| **Phase 4: CT 105 -> VLAN 30** | `OPEN` | Move the Headscale container to VLAN 30, update login-server URLs. |
 
-## Passive (act only if circumstances change)
+## High Availability roadmap (big, references vault `High Availability MOC`)
 
-| # | Item | Status | Notes |
-|---|---|---|---|
-| 7 | **Evidence-scoring weight recalibration** | `PASSIVE` | Calibrated to 7 frozen fixtures. Revisit only if a real incident shows the numbers are off (each score ships its factor breakdown, so a wrong number is legible). |
-| 8 | **llm_router / Open WebUI policy boundary** | `PASSIVE` | Deliberately outside the policy boundary (general-purpose chat, no telemetry authority, no execution). Revisit ONLY if they gain tool-calling into the estate. |
-| 9 | **Descoped conformance targets (NF-AIOPS-004)** | `PASSIVE` | Proxmox config assertions, NPM config-to-Git export - each needs a source-of-truth decision first. |
-| 10 | **monitoring-stack repo reconcile** | `PASSIVE` | NF-AIOPS-002 noted live Grafana has more alert rules than the config-as-code repo. A known live/repo divergence to reconcile. |
+| Item | Status | Notes |
+|---|---|---|
+| WAN failover | see Network above | |
+| **Compute HA** | `OPEN` | `ha-manager` + Ceph or ZFS replication for VM/CT failover. |
+| **Storage redundancy** | `OPEN` | Randy is a single storage node (SPOF #2). |
+| **EX3400 switch Virtual Chassis** | `OPEN` | Switch-level redundancy. |
+
+## Security
+
+| Item | Status | Notes |
+|---|---|---|
+| **VLAN 1 egress lockdown - enforcing** | `OPEN` | Phase 1 (log-only observe) deployed 2026-07-11 via rw API; enforcing rules NOT yet applied. Verified 2026-07-15. |
+| **pve1 (Mac Mini) hardening** | `OPEN` | No `10-hardening.conf` drop-in (verified 2026-07-15); pve1 was outside the Ansible hardening fleet. |
+
+## AI-Ops / monitoring
+
+| Item | Status | Notes |
+|---|---|---|
+| **Config-drift: cover service env files** | `OPEN` | `netframe_confdrift` fingerprints interfaces/sshd/sysctl but NOT env files like `/etc/llm_router.env` - the 2026-07-14 outage was env drift it would not have caught. |
+| **QuarkyLab student-env Phase 03 packages** | `OPEN` | Add the researcher's specific physics packages to the container def (needs owner input). |
+| Evidence-scoring weight recalibration | `PASSIVE` | Revisit only if a real incident shows the numbers are off. |
+| llm_router / Open WebUI policy boundary | `PASSIVE` | Deliberately out of the boundary; revisit only if they gain tool-calling. |
+| Descoped conformance targets (Proxmox, NPM) | `PASSIVE` | Each needs a source-of-truth decision first. |
+| monitoring-stack repo reconcile | `PASSIVE` | Live Grafana has more alert rules than the config-as-code repo (NF-AIOPS-002). |
+
+## Jarvis LLM platform (enhancements / known limitations)
+
+| Item | Status | Notes |
+|---|---|---|
+| **RAG auto-reindex** | `OPEN` | RAG index rebuild is manual; a nightly systemd timer would auto-refresh. |
+| **TLS for `netframe.local` fronts** | `OPEN` | `llm`/`chat.netframe.local` are HTTP-only; step-ca could issue certs. |
+| Streaming in `llm_router` | `PASSIVE` | Responses are non-streamed; nice-to-have. |
+| Claude API fallback | `PASSIVE` | Deliberately disabled until `ANTHROPIC_API_KEY` is set (local-only by choice). |
+
+## Other projects
+
+| Item | Status | Notes |
+|---|---|---|
+| **VoIP** | `OPEN` | FreePBX + 5x Cisco CP-8841 phones (deferred, post core infra). |
+| **Cyberpunk monitoring dashboard** | `OPEN` | Live API integration for the wall dashboard. |
+| **CCNA study cadence** | `OPEN` | Personal/study item (owner). |
+
+## Hardware follow-ups (minor, from runbooks)
+
+| Item | Status | Notes |
+|---|---|---|
+| Randy: mark the dead PCIe slot on the chassis | `OPEN` | So it is never reused (Randy-PCIe-Slot-Recovery runbook). |
+| Randy: re-secure re-routed SAS cables + watch CMOS battery | `OPEN` | Same runbook. |
 
 ## Parked (deliberate defer)
 
-| # | Item | Status | Notes |
-|---|---|---|---|
-| 11 | **Offsite backup restic -> cloud** | `PARKED` | B2 vs AWS evaluated 2026-07-15; B2 is the better default (egress freedom for DR restores). Target pools currently empty, so cost ~$0 and nothing at risk. Revisit when there's offsite-worthy data. |
+| Item | Status | Notes |
+|---|---|---|
+| Offsite restic -> cloud backup | `PARKED` | B2 preferred (egress freedom); target pools empty, nothing at risk. B2 vs AWS evaluated 2026-07-15. |
 
 ---
 
-## Recently closed (this session, for context)
+## Recently closed (this session)
 
 Console evidence integration + auto-restart hook; NPM/Pi-hole DNS-record audit check;
 hardening drift detection; NPM admin password rotation; OPNsense egress-observe key
-rotation+scoping. Plus corrections of several stale "open" notes now confirmed done:
-Ansible hardening rollout, pve5 bogus gateway, OPNsense backup key scoping, Pi-hole
-password (unified + vaulted). The full AI-Ops trustworthiness program is documented in
-`docs/SESSION-BUILD-REPORT-2026-07-15.md` (public sanitized edition in the Home-Lab repo).
+rotation+scoping. Stale "open" notes confirmed DONE: Ansible hardening rollout, pve5 bogus
+gateway, OPNsense backup key scoping, Pi-hole password (unified + vaulted). Full AI-Ops
+program: `docs/SESSION-BUILD-REPORT-2026-07-15.md`.
 
-> **Maintenance rule:** when an item is finished, update BOTH this file and the relevant
-> per-topic memory, and re-verify against live state rather than trusting the note - today
-> surfaced four stale "open" items that were actually done.
+> **Maintenance rules:**
+> 1. New todo items are committed HERE. "What's next?" references this file.
+> 2. When closing an item, update this file AND the relevant memory, and **re-verify
+>    against live state** - this reconcile found multiple stale "open" notes that were done.
+> 3. The public Home-Lab README "Planned" list and the vault MOC roadmap are the
+>    coarser, public-facing views; THIS file is authoritative. Keep them from drifting.
