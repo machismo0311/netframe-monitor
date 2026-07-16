@@ -834,3 +834,33 @@ def test_hardening_drift_reuses_generated_epoch_freshness():
     no_epoch = json.dumps({"any_drift": False, "drifted_nodes": "", "nodes": {"pve3": {}}})
     assert mon.parse_hardening_drift(no_epoch)["stale"] is True
     assert mon.classify("hardening_drift", 0, no_epoch) == "WARN"
+
+
+# ---- confdrift baseline: an outage must never poison or wipe a node's baseline ----
+
+def test_confdrift_bless_during_outage_preserves_unreachable_node(tmp_path, monkeypatch):
+    cd = _load("netframe_confdrift")
+    monkeypatch.setattr(cd, "BASELINE", str(tmp_path / "baseline.json"))
+    cd.save_baseline({"pve3": {"env": "aaa"}, "jarvis": {"env": "bbb"}})
+    cd.save_baseline({"pve3": None, "jarvis": {"env": "ccc"}})   # pve3 down at bless time
+    fp = cd.load_baseline()["fingerprints"]
+    assert fp["pve3"] == {"env": "aaa"}      # last blessed fingerprints kept, not wiped
+    assert fp["jarvis"] == {"env": "ccc"}    # reachable node still updates
+
+
+def test_confdrift_check_survives_none_poisoned_baseline(tmp_path, monkeypatch):
+    # Baselines written before the merge fix can hold null for a node that was down;
+    # check must compare cleanly (not AttributeError) when that node comes back.
+    cd = _load("netframe_confdrift")
+    monkeypatch.setattr(cd, "BASELINE", str(tmp_path / "baseline.json"))
+    monkeypatch.setattr(cd, "OUT", str(tmp_path / "report.md"))
+    (tmp_path / "baseline.json").write_text(json.dumps(
+        {"blessed": "x", "fingerprints": {"pve3": None, "jarvis": {"env": "bbb"}}}))
+    monkeypatch.setattr(cd, "NODES", {"pve3": "203.0.113.1", "jarvis": None})
+    monkeypatch.setattr(cd, "collect",
+                        lambda: {"pve3": {"env": "zzz"}, "jarvis": {"env": "bbb"}})
+    cd.cmd_check()
+    report = open(tmp_path / "report.md").read()
+    # pve3's null baseline means it is unmonitored until re-blessed, never a crash
+    # or a false drift; jarvis matches its baseline.
+    assert "DRIFTED" not in report

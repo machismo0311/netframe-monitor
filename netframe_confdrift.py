@@ -6,6 +6,9 @@ read-only 'monitor' SSH path (no new credentials, no changes to the nodes):
   - interfaces: /etc/network/interfaces
   - ssh:        /etc/ssh/sshd_config + sshd_config.d/*.conf
   - sysctl:     /etc/sysctl.d/*.conf
+  - env:        every EnvironmentFile= referenced by /etc/systemd/system/*.service
+                plus /etc/*.env (the 2026-07-14 llm_router outage was env drift the
+                first three categories could not see)
 It compares each fingerprint to a HUMAN-APPROVED baseline (context/config-baseline.json,
 Jarvis-local). Drift = a category whose hash differs from baseline, i.e. a config
 changed since it was last blessed. Legitimate changes are acknowledged by re-running
@@ -38,7 +41,17 @@ FP_CMD = (
     'echo "interfaces:$(sha256sum < /etc/network/interfaces 2>/dev/null | cut -d\' \' -f1)"; '
     'echo "ssh:$(cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null '
     '| sha256sum | cut -d\' \' -f1)"; '
-    'echo "sysctl:$(cat /etc/sysctl.d/*.conf 2>/dev/null | sha256sum | cut -d\' \' -f1)"'
+    'echo "sysctl:$(cat /etc/sysctl.d/*.conf 2>/dev/null | sha256sum | cut -d\' \' -f1)"; '
+    # env fingerprints are name:content-hash lines, so a NEW env file drifts even when
+    # the remote read-only 'monitor' user cannot read it (marked UNREADABLE). Content
+    # changes of unreadable remote files stay invisible; on Jarvis, the node with the
+    # custom service env files, the check runs locally as root, so coverage is full.
+    'echo "env:$({ grep -hs "^EnvironmentFile=" /etc/systemd/system/*.service '
+    '| sed "s/^EnvironmentFile=-*//"; ls /etc/*.env 2>/dev/null; } | sort -u '
+    '| while read -r f; do if [ -r "$f" ]; then '
+    'echo "$f:$(sha256sum < "$f" | cut -d" " -f1)"; '
+    'elif [ -e "$f" ]; then echo "$f:UNREADABLE"; else echo "$f:MISSING"; fi; done '
+    '| sha256sum | cut -d" " -f1)"'
 )
 SSH_OPTS = ["-i", KEY, "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
             "-o", "StrictHostKeyChecking=accept-new"]
@@ -74,8 +87,12 @@ def load_baseline():
 
 
 def save_baseline(cur):
+    # keep the previous blessed fingerprints for nodes unreachable right now, so a
+    # bless during an outage never wipes (or None-poisons) a node's baseline
+    merged = load_baseline().get("fingerprints", {})
+    merged.update({k: v for k, v in cur.items() if v is not None})
     os.makedirs(os.path.dirname(BASELINE), exist_ok=True)
-    payload = {"blessed": dt.datetime.now(dt.timezone.utc).isoformat(), "fingerprints": cur}
+    payload = {"blessed": dt.datetime.now(dt.timezone.utc).isoformat(), "fingerprints": merged}
     with open(BASELINE, "w") as fh:
         json.dump(payload, fh, indent=2)
 
@@ -103,7 +120,7 @@ def cmd_check():
         if c is None:
             unreach.append(name)
             continue
-        b = base.get(name, {})
+        b = base.get(name) or {}
         for cat, h in c.items():
             if b.get(cat) and b[cat] != h:
                 drift.append((name, cat))
@@ -118,8 +135,8 @@ def cmd_check():
                      "`netframe_confdrift.py set-baseline`. If not, investigate what changed.")
         print(f"CONFIG DRIFT: {len(drift)} category/node change(s) vs baseline.")
     else:
-        lines.append("All node configs match the approved baseline (interfaces, ssh, sysctl). "
-                     "No drift.")
+        lines.append("All node configs match the approved baseline (interfaces, ssh, sysctl, "
+                     "env). No drift.")
         print("no config drift.")
     if unreach:
         lines.append(f"\n_Unreachable this run (not evaluated): {', '.join(unreach)}._")
