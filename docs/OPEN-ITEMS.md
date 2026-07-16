@@ -24,12 +24,15 @@ _Last full reconcile: 2026-07-15._
 | **OPNsense CARP HA pair** | `OPEN` | Removes the top-ranked SPOF (OPNsense = 1 VM on pve2). Part of the HA roadmap. |
 | **DAC 10G uplink -> fiber** | `OPEN` | `xe-0/2/3 -> UniFi SFP2`: replace the DAC with fiber optics. |
 
-## Headscale (migrate off commercial Tailscale)
+## Headscale / STUDENT REMOTE ACCESS (the actual goal - roadmap gap)
+
+> **KEY FINDING 2026-07-15:** Headscale's stated purpose was STUDENT remote login to QuarkyLab SLURM, but the 'phases' only cover infra/admin migration. Live state: 0 student users, 0 student devices, NO student access path exists. Kyle + Fernanda work (done). **Real DECISION needed (drives the work): how do students connect?** (1) per-device Headscale + `student` user + preauth key + ACL to SLURM login only; (2) hardened internet-facing SSH bastion into SLURM; (3) web (Open OnDemand / shell-in-browser). Phase 2/4 are polish vs this. AWAITING OWNER DECISION on the access model.
+
 
 | Item | Status | Notes |
 |---|---|---|
-| **Phase 2: Ares MagicDNS resolv.conf fix** | `OPEN` | `/etc/resolv.conf` permission error blocks MagicDNS on Ares. |
-| **Phase 3: migrate Kyle + researcher devices** | `VERIFY` | Off commercial Tailscale. NOTE: QuarkyLab shows a Headscale-range IP (100.64.0.7, 2026-07-15) so some device migration is already done - confirm exactly which devices remain on commercial Tailscale before working this. Researcher's Mac must migrate in lockstep. |
+| **Phase 2: Ares MagicDNS fix** | `LOW-VALUE POLISH` | Admin convenience only (hostnames over tailnet on Kyle's own workstation); NOT on the student path. Deprioritise. |
+| **Phase 3: device migration** | `VERIFY (mostly DONE)` | 2026-07-15 live check: 9 nodes on Headscale incl QuarkyLab (node 7) + Fernanda's machine (node 9, FUS22-009897, `fernanda` user). Only 2 users: kyle, fernanda. Kyle + Fernanda are migrated = Phase 3 effectively done for the researcher. |
 | **Phase 4: CT 105 -> VLAN 30** | `OPEN` | Move the Headscale container to VLAN 30, update login-server URLs. |
 
 ## High Availability roadmap (big, references vault `High Availability MOC`)
