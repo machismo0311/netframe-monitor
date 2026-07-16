@@ -97,6 +97,7 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
+| **pve3 physical revival + post-outage cleanup** | `OPEN` | pve3 hard-down since 2026-07-16 ~06:55 EDT (suspected power/UPS fault; WoL no response). NPM (101) + Grafana (103) were PBS-restored to **pve4** and now LIVE THERE. On revival: check UPS/PSU first, let 102/105/106/107/201 autostart, delete orphaned `pve/vm-101-disk-0` + `vm-103-disk-0` LVs on pve3, decide migrate-back, find root cause. Full checklist: `Home-Lab/vault/Runbook/Pve3-Outage-Recovery-2026-07-16.md`. |
 | Randy: mark the dead PCIe slot on the chassis | `OPEN` | So it is never reused (Randy-PCIe-Slot-Recovery runbook). |
 | Randy: re-secure re-routed SAS cables + watch CMOS battery | `OPEN` | Same runbook. |
 
