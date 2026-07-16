@@ -66,7 +66,6 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
-| **Collector: no UNREACHABLE verdict for a down node** | `OPEN` | Found during the 2026-07-16 pve3 outage: `classify()` has no node-unreachable concept, so a hard-down node (ssh rc=255 "No route to host") shows `journal_errors=OK`, `smart=OK`, others WARN - a dead node's SMART reads healthy. Wants an explicit per-node UNREACHABLE verdict (rc=255 + connect-error text) so the interpreter and Discord alerts say "node down", not scattered WARNs. |
 | **QuarkyLab student-env Phase 03 packages** | `OPEN` | Add the researcher's specific physics packages to the container def (needs owner input). |
 | Evidence-scoring weight recalibration | `PASSIVE` | Revisit only if a real incident shows the numbers are off. |
 | llm_router / Open WebUI policy boundary | `PASSIVE` | Deliberately out of the boundary; revisit only if they gain tool-calling. |
@@ -110,6 +109,17 @@ _Last full reconcile: 2026-07-15._
 ---
 
 ## Recently closed (this session)
+
+**UNREACHABLE verdict + Grafana-independent node-down DM (PR #63, 2026-07-16):**
+`classify()` now yields UNREACHABLE on ssh transport failure (line-start-keyed on
+ssh's own error, spoof-proof vs journal text) instead of a dead node reading
+`journal_errors=OK`/`smart=OK`; ranked with TIMEOUT/AUTH-FAIL. New `netframe_alert.py`
+in every 15-min cycle DMs the operator via the on-call bot token on down/recovery
+transitions (deterministic templates, no LLM, out-of-boundary by construction;
+state advances only on successful send). Live-fire validated against the real pve3
+outage: all 6 pve3 checks UNREACHABLE, DM delivered, repeat runs silent. Config
+`/etc/netframe-alert.env` via service EnvironmentFile - which the new confdrift env
+category flagged as drift on deploy (first real catch), then re-blessed.
 
 **Config-drift env-file coverage (PR #62, 2026-07-16):** new `env` fingerprint category
 on all nodes - every `EnvironmentFile=` referenced from `/etc/systemd/system/*.service`
