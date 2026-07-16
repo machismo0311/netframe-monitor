@@ -165,7 +165,8 @@ LLM_ROUTER_CONFORMANCE = "/usr/local/sbin/nfm-llm-router-conformance"
 # never make the estate look unhealthy, so a skip cannot raise the overall verdict. It is
 # surfaced separately as "NOT TESTED" rather than folded in, so it also cannot be mistaken
 # for a passing test. Module-level so the ordering is testable rather than buried in main().
-VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2}
+VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2,
+                "UNREACHABLE": 2}
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU, "llm_router_conformance": LLM_ROUTER_CONFORMANCE}},
@@ -548,6 +549,19 @@ def classify(name, rc, out):
             return "AUTH-FAIL"
     if "permission denied (publickey" in low or "host key verification failed" in low:
         return "AUTH-FAIL"
+    # Node down must say so, not fall through to per-check defaults (the 2026-07-16
+    # pve3 outage read as journal_errors=OK / smart=OK). Keyed off ssh's OWN
+    # connect-error line (starts "ssh:"), never journal/log text, same anti-spoof
+    # rule as AUTH-FAIL; journalctl lines start with timestamps so cannot match.
+    if rc == 255:
+        for line in out.splitlines():
+            s = line.strip().lower()
+            if s.startswith("ssh:") and ("no route to host" in s
+                                          or "connection timed out" in s
+                                          or "connection refused" in s
+                                          or "network is unreachable" in s
+                                          or "could not resolve hostname" in s):
+                return "UNREACHABLE"
     if name == "guests":
         if rc != 0:
             return "WARN"
@@ -768,7 +782,7 @@ def main():
     append_history({"ts": started.isoformat(), "worst": worst,
                     "verdicts": verdicts, "metrics": flatten_metrics(report["nodes"])})
 
-    return 1 if worst in ("AUTH-FAIL", "TIMEOUT") else 0
+    return 1 if worst in ("AUTH-FAIL", "TIMEOUT", "UNREACHABLE") else 0
 
 
 if __name__ == "__main__":

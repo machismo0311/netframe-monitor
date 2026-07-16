@@ -4,6 +4,9 @@
 # AUTH-FAIL/TIMEOUT, while the interpreter always runs (|| true).
 /usr/bin/python3 /opt/netframe-monitor/netframe_monitor.py
 rc=$?
+# Deterministic node-down DM (Grafana-independent): fires on UNREACHABLE
+# transitions straight from last_run.json, before any LLM step.
+/usr/bin/python3 /opt/netframe-monitor/netframe_alert.py || true
 /usr/bin/python3 /opt/netframe-monitor/netframe_interpret.py || true
 # Rebuild the unified memory dashboard (index.html) from all reports + the ledger.
 /usr/bin/python3 /opt/netframe-monitor/netframe_web.py || true

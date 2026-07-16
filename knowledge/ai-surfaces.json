@@ -204,6 +204,19 @@
       "enforcement_point": "NONE, by the same recorded decision as llm_router (Open WebUI is its front-end): general-purpose conversational chat with no operational telemetry, no Jarvis authority behind its answers, and no execution path. Gating it would block ordinary conversation. Revisit if it ever gains tool-calling into the estate.",
       "verified": "2026-07-15",
       "verified_by": "boundary decision"
+    },
+    {
+      "component": "netframe_alert",
+      "repo": "netframe-monitor",
+      "runs_on": "jarvis",
+      "calls_llm": false,
+      "operator_visible": true,
+      "can_recommend": false,
+      "can_execute": false,
+      "coverage": "out-of-boundary",
+      "enforcement_point": "deterministic by construction: fixed message templates carrying only node names + timestamp, no model prose anywhere in the path, so there is nothing for the policy engine to screen; never executes",
+      "verified": "2026-07-16",
+      "verified_by": "source review: no OLLAMA_URL, templates only, send-only"
     }
   ],
   "_evidence_engine": "netframe-monitor/netframe_evidence.py (score + section_for_current_state); SINGLE shared implementation - no path computes its own quality/confidence or renders a variant"
