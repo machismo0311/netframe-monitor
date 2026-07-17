@@ -23,6 +23,7 @@ _Last full reconcile: 2026-07-15._
 | **WAN failover - FirstNet 5G (MR7400)** | `IN-PROGRESS` | Multi-step implementation checklist in `Home-Lab/vault/Runbook/WAN-Failover-FirstNet-MR7400-Plan-2026-07-12.md` (remove legacy .1.1 VIP, cable MR7400 to nic2, pve2 vmbr2, OPNsense WAN2 failover group, test, WAN2-down Grafana alert). The #1 SPOF (single WAN) reducer. |
 | **OPNsense CARP HA pair** | `OPEN` | Removes the top-ranked SPOF (OPNsense = 1 VM on pve2). Part of the HA roadmap. |
 | **DAC 10G uplink -> fiber** | `OPEN` | `xe-0/2/3 -> UniFi SFP2`: replace the DAC with fiber optics. |
+| **VLAN 30 trunk -> pve4 + pve5 ports** | `OPEN` (30-min window) | Un-pins NPM/Vaultwarden/OpenWebUI from pve3 so today's 13h vault-outage class becomes a 15-min PBS restore to any node (AAR follow-on). RISK: live EX3400 change on ports carrying corosync - use `commit confirmed 5`, additive tag only (no new cables = no loop paths), cluster survives both ports dropping (5/7 quorate). Needs EX3400 creds via break-glass. Widens VLAN30 L2 domain to two more (already-trusted) node ports. |
 
 ## Headscale / STUDENT REMOTE ACCESS
 
@@ -55,13 +56,15 @@ _Last full reconcile: 2026-07-15._
 | **Compute HA** | `OPEN` | `ha-manager` + Ceph or ZFS replication for VM/CT failover. |
 | **Storage redundancy** | `OPEN` | Randy is a single storage node (SPOF #2). |
 | **EX3400 switch Virtual Chassis** | `OPEN` | Switch-level redundancy. |
-| **RKE2: root-cause the failover failure + deliberate failover test** | `OPEN` | 2026-07-16: losing cp1 crash-looped rke2-server on BOTH survivors (~2000x/12h, startup fatal instead of waiting for etcd quorum; zombie shims) - the HA CP was not HA in practice. Recovery = stop + rke2-killall.sh + simultaneous restart (works, in the pve3 runbook addendum). ROOT CAUSE CONFIRMED same evening (journals): the 12:48-12:52 UTC PBS restores onto pve4 IO-starved rke2-cp2's disk (same thin pool) -> 2-member etcd leaderless -> both survivors fatal-exited on lost leases at 12:56:00 -> containerd-zombie restart deadlock. Remaining work once cp1 is back: planned failover test (repro = IO-stall a CP disk with one member down) + consider restore --bwlimit policy and etcd IO isolation. |
+| **Quarterly failure drill ("game day")** | `OPEN` (schedule) | ~1h, announced window, quarterly: deliberately fail one node's link (switch-side or cable), verify the node-down DM lands <15 min, triage runbook reaches the right diagnosis (link-state check), break-glass opens, recovery steps work. Drill #1 = the RKE2 failover test below. RISK: bounded (registry/Kuma only exposure; proven recovery in hand); never run casually/unannounced. |
+| **RKE2: root-cause the failover failure + deliberate failover test** | `OPEN` | 2026-07-16: losing cp1 crash-looped rke2-server on BOTH survivors (~2000x/12h, startup fatal instead of waiting for etcd quorum; zombie shims) - the HA CP was not HA in practice. Recovery = stop + rke2-killall.sh + simultaneous restart (works, in the pve3 runbook addendum). ROOT CAUSE CONFIRMED same evening (journals): the 12:48-12:52 UTC PBS restores onto pve4 IO-starved rke2-cp2's disk (same thin pool) -> 2-member etcd leaderless -> both survivors fatal-exited on lost leases at 12:56:00 -> containerd-zombie restart deadlock. cp1 is BACK (rejoined same evening) - the test can run in any announced window; make it Game Day #1 (below). Repro = IO-stall a CP disk with one member down. --bwlimit policy adopted in runbooks. |
 
 ## Security
 
 | Item | Status | Notes |
 |---|---|---|
 | **Break-glass credential file: populate (owner)** | `OPEN` (5 min) | Mechanism built+verified 2026-07-16 (Home-Lab `scripts/break-glass/`, AAR rec 11). Owner runs once on Ares: `export BW_SESSION="$(bw unlock --raw)" && ~/Home-Lab/scripts/break-glass/breakglass-refresh.sh` (first run writes the item list; review names vs Vaultwarden, re-run). Re-run after any rotation. Until populated, the circular dependency (switch/firewall creds only in Vaultwarden) remains. |
+| **Ares full-disk encryption (decision)** | `OPEN` (decision) | Found 2026-07-16: Ares has NO LUKS. It holds root SSH keys to the whole cluster, the DR age key, and (once populated) the break-glass credential file - physical theft of the disk = the estate. Options: reinstall with LUKS (a day, the clean fix) vs encrypted home/keys-only vs accept (it's a desktop at home). Owner call; filed from the AAR risk discussion. |
 | **VLAN 1 egress lockdown - enforcing** | `OPEN` (deliberately deferred) | Phase 1 (infra-scoped, log-only observe) is deployed and healthy (catch-all 0 hits, verified 2026-07-15). NOT rushed to enforce - owner chose to wait 2026-07-14, and there are real prereqs. **Enforce-phase plan (GUI, since the egress API key is now read-only):** (1) DHCP-reserve Ares .199/.100 so the exemption can't drift; (2) add multicast/broadcast pass (224.0.0.0/4, 239.0.0.0/8, 255.255.255.255) or UniFi .2 discovery gets blocked/noisy; (3) decide whether to exclude network gear .2/.50/.176 (legit phone-home); (4) add CDN ranges for RKE2 image pulls + switch Mist; (5) consider IPv6 egress (v4-only so far); (6) then flip rule 940 `c7fed07f` action pass->block (keep log). Rollback: set 940 back to pass. See `project-security-vlan-segmentation` memory. |
 
 ## AI-Ops / monitoring
@@ -98,6 +101,7 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
+| pve3: discrete Intel NIC (i210/i350, ~$25) | `OPEN` (order) | Sidesteps the onboard I219's e1000e hang class entirely (offloads-off mitigates, does not cure). Swap during the same visit as the BIOS flag below. |
 | pve3: BIOS "power on after AC loss" + e1000e recurrence watch | `OPEN`/`PASSIVE` | BIOS flag needs a console visit (headless WoL only works after a clean shutdown, not a hang). e1000e: offloads now off; if hangs recur, InterruptThrottleRate or a discrete NIC. |
 | Randy: mark the dead PCIe slot on the chassis | `OPEN` | So it is never reused (Randy-PCIe-Slot-Recovery runbook). |
 | Randy: re-secure re-routed SAS cables + watch CMOS battery | `OPEN` | Same runbook. |
