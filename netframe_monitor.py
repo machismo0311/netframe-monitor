@@ -84,6 +84,13 @@ MONITORING_GUESTS = {"grafana", "wazuh", "prometheus", "loki",
 # probed from *inside* CT 103 via a fixed, root-owned, sudoers-pinned wrapper
 # (/usr/local/sbin/nfm-prom-health) — the monitor cannot pass it any arguments.
 PROMETHEUS = "sudo -n /usr/local/sbin/nfm-prom-health"
+# UPS health via pve3's NUT daemon (LAN-listening :3493), polled from Jarvis with
+# nut-client so UPS state is visible in every report and the loss of UPS monitoring
+# itself surfaces as a WARN instead of dying silently with its host (AAR 2026-07-16
+# recommendation 14). Both UPSes: tripplite (USB) + midatlantic (SNMP).
+UPS = ("for u in tripplite midatlantic; do echo \"== $u ==\"; "
+       "/usr/bin/upsc $u@192.168.10.201 2>&1 "
+       "| grep -E 'ups.status|battery.charge:|battery.runtime:'; done")
 # NPM-vs-Pi-hole DNS audit (runs on pve3, where NPM lives). Enumerates NPM proxy-host
 # server_names and resolves each against the primary Pi-hole - catches a published host
 # with no local DNS record (rebind-stripped -> unresolvable LAN-wide, the 2026-07-15 gap).
@@ -173,13 +180,15 @@ NODES = {
     "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY, "hardening_drift": HARDENING_DRIFT}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
-    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS, "npm_dns": NPM_DNS}},
-    "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
+    # prometheus check rides with CT 103, which moved to pve4 2026-07-16 (AAR rec 12:
+    # alerting no longer shares a node with NPM/Vaultwarden); npm_dns stays with NPM on pve3.
+    "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "npm_dns": NPM_DNS}},
+    "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS}},
     "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
     "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
-    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "llm_router": LLM_ROUTER, "console_backend": CONSOLE_BACKEND, "report_backend": REPORT_BACKEND, "openwebui_reach": OPENWEBUI_REACH, "console_transact": CONSOLE_TRANSACT, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW}},
+    "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "llm_router": LLM_ROUTER, "console_backend": CONSOLE_BACKEND, "report_backend": REPORT_BACKEND, "openwebui_reach": OPENWEBUI_REACH, "console_transact": CONSOLE_TRANSACT, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW, "ups": UPS}},
 }
 
 SSH_OPTS = [
@@ -521,6 +530,28 @@ def parse_wazuh(out):
             "core_down": core_down, "up": not core_down}
 
 
+def parse_ups(out):
+    """Per-UPS status/charge from upsc output blocks (== name == headers)."""
+    ups = {}
+    cur = None
+    for line in out.splitlines():
+        m = re.match(r"==\s*(\S+)\s*==", line)
+        if m:
+            cur = m.group(1)
+            ups[cur] = {}
+            continue
+        m = re.match(r"\s*(ups\.status|battery\.charge|battery\.runtime):\s*(.+)", line)
+        if m and cur:
+            ups[cur][m.group(1)] = m.group(2).strip()
+    charges = [int(float(v["battery.charge"])) for v in ups.values()
+               if v.get("battery.charge", "").replace(".", "").isdigit()]
+    statuses = [v.get("ups.status", "") for v in ups.values()]
+    return {"ups": ups, "reporting": sum(1 for v in ups.values() if v),
+            "min_charge": min(charges) if charges else None,
+            "all_online": bool(statuses) and all(
+                "OL" in s and "OB" not in s and "LB" not in s for s in statuses)}
+
+
 PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
            "backup_verify": parse_backup_verify,
@@ -533,7 +564,8 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "openwebui_reach": parse_llm_router, "console_transact": parse_transact,
            "llm_router_conformance": parse_llm_router_conformance,
            "npm_dns": parse_npm_dns,
-           "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog}
+           "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog,
+           "ups": parse_ups}
 
 
 def classify(name, rc, out):
@@ -573,6 +605,14 @@ def classify(name, rc, out):
         if rc != 0:
             return "WARN"  # endpoint unreachable / HTTP error
         return "OK" if re.search(r'"database"\s*:\s*"ok"', out) else "WARN"
+    if name == "ups":
+        # WARN when a UPS is on battery / low battery, or when fewer than BOTH
+        # UPSes report (NUT unreachable = UPS monitoring itself is lost — the
+        # AAR gap: it used to die silently with pve3).
+        d = parse_ups(out)
+        if d["reporting"] < 2:
+            return "WARN"
+        return "OK" if d["all_online"] else "WARN"
     if name == "prometheus":
         return "OK" if "healthy" in low else "WARN"
     if name == "loki":
@@ -689,6 +729,10 @@ def flatten_metrics(nodes):
             if name == "guests":
                 flat[f"{host}.guests.running"] = m.get("running")
                 flat[f"{host}.guests.stopped"] = m.get("stopped")
+            if name == "ups":
+                flat[f"{host}.ups.reporting"] = m.get("reporting")
+                if m.get("min_charge") is not None:
+                    flat[f"{host}.ups.min_charge"] = m["min_charge"]
             if name in ("grafana", "prometheus", "loki", "pihole", "llm_router",
                         "console_backend", "report_backend", "openwebui_reach"):
                 flat[f"{host}.{name}.up"] = 1 if m.get("up") else 0
