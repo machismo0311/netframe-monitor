@@ -915,3 +915,33 @@ def test_alert_diff_fires_only_on_transitions():
     assert al.diff_state([], ["pve3"]) == (["pve3"], [])      # went down -> alert
     assert al.diff_state(["pve3"], ["pve3"]) == ([], [])      # still down -> silent
     assert al.diff_state(["pve3"], []) == ([], ["pve3"])      # recovered -> alert
+
+
+# ---- ups: UPS state must alarm on battery AND on losing UPS monitoring itself ----
+
+UPS_OK = """== tripplite ==
+battery.charge: 100
+battery.runtime: 1800
+ups.status: OL
+== midatlantic ==
+battery.charge: 98
+ups.status: OL CHRG"""
+
+
+def test_ups_both_online_is_ok():
+    assert mon.classify("ups", 0, UPS_OK) == "OK"
+    m = mon.parse_ups(UPS_OK)
+    assert m["reporting"] == 2 and m["min_charge"] == 98 and m["all_online"]
+
+
+def test_ups_on_battery_is_warn():
+    out = UPS_OK.replace("ups.status: OL\n", "ups.status: OB DISCHRG\n")
+    assert mon.classify("ups", 0, out) == "WARN"
+
+
+def test_ups_monitoring_lost_is_warn_not_ok():
+    # NUT unreachable (the AAR gap: UPS monitoring died silently with pve3) or
+    # only one UPS answering must WARN, never read as healthy.
+    assert mon.classify("ups", 0, "") == "WARN"
+    one = "== tripplite ==\nbattery.charge: 100\nups.status: OL"
+    assert mon.classify("ups", 0, one) == "WARN"
