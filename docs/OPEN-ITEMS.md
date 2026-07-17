@@ -92,7 +92,6 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
-| **Home Assistant: onboarding** | `OPEN` | HAOS 18.1 VM 110 on pve5 installed 2026-07-16 (http://homeassistant.netframe.local:8123, **192.168.10.60** static-mapped). First visit creates the OWNER account - do it soon (unclaimed instance) and file creds in Vaultwarden. Runbook: `Home-Lab/vault/Runbook/Home-Assistant-Install-2026-07-16.md`. |
 | **OPNsense config-backup endpoint staleness** | `VERIFY` | 2026-07-16: `/api/core/backup/download/this` kept returning the 2026-07-13 revision even after a DHCP static-map change was saved, applied and demonstrably live (VM re-leased .60). The nightly `opnsense-config-backup` (Ares cron 03:17) uses this endpoint -> DR backups may silently miss recent changes. Check the next nightly backup contains staticmap `bc:24:11:27:b2:5c`; if absent, investigate (endpoint choice or caching) and fix backup.sh. |
 | **Home Assistant: future add-ons / IoT VLAN 40** | `PASSIVE` | Mosquitto/ESPHome/Zigbee2MQTT as hardware arrives (Zigbee stick -> USB passthrough on pve5); when first IoT devices land on VLAN 40, add OPNsense HA(.60)->VLAN40 rules + mDNS strategy. Details in the install runbook. |
 | **VoIP** | `OPEN` | FreePBX + 5x Cisco CP-8841 phones (deferred, post core infra). |
@@ -117,6 +116,13 @@ _Last full reconcile: 2026-07-15._
 ---
 
 ## Recently closed (this session)
+
+**Home Assistant owner account CLAIMED (2026-07-17):** the unclaimed-instance
+open door is closed. Owner `kyle` created via the onboarding API; user step
+done=True, second owner-create now 403. **Credentials handed to owner to file in
+Vaultwarden (Services folder) - NOT yet filed** (bw was locked). Core config
+(location/units) + integrations left for the owner to finish interactively (personal prefs).
+
 
 **AAR recommendations 11-14 (2026-07-16 evening):** break-glass credential
 mechanism built+verified (populate = owner action above); Grafana->pve4 +
