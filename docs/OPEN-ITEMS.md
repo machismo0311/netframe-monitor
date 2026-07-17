@@ -65,7 +65,6 @@ _Last full reconcile: 2026-07-15._
 |---|---|---|
 | **Break-glass credential file: populate (owner)** | `OPEN` (5 min) | Mechanism built+verified 2026-07-16 (Home-Lab `scripts/break-glass/`, AAR rec 11). Owner runs once on Ares: `export BW_SESSION="$(bw unlock --raw)" && ~/Home-Lab/scripts/break-glass/breakglass-refresh.sh` (first run writes the item list; review names vs Vaultwarden, re-run). Re-run after any rotation. Until populated, the circular dependency (switch/firewall creds only in Vaultwarden) remains. |
 | **Ares full-disk encryption (decision)** | `OPEN` (decision) | Found 2026-07-16: Ares has NO LUKS. It holds root SSH keys to the whole cluster, the DR age key, and (once populated) the break-glass credential file - physical theft of the disk = the estate. Options: reinstall with LUKS (a day, the clean fix) vs encrypted home/keys-only vs accept (it's a desktop at home). Owner call; filed from the AAR risk discussion. |
-| **VLAN 20 (BMC) egress block** | `READY - awaiting go` | Found 2026-07-17 while assessing Supermicro CVE-2026-3821 (config-backup verified): VLAN 20 inbound is clamped (LAN/Servers blocked 2026-07-03) but its interface still carries legacy "trusted" pass rules -> **management AND internet**. A compromised BMC can phone home and reach VLAN 1. **Staged 2026-07-17** (Home-Lab #30): `scripts/opnsense/vlan20-egress-clamp.sh` (+ rollback) removes the 3 opt1 trusted-pass rules, adds block+log; applied via guest agent (write_config + filter reload), on-box backup + 1-cmd rollback. Dry-run validated (exactly 3 pass rules, 0 other-interface rules touched). Blast radius = VLAN20 only (BMC mgmt is L2). Runbook `VLAN20-BMC-Egress-Clamp-2026-07-17.md`. Clamp-then-observe the block log for BMC NTP/DNS. **Pre-flight review 2026-07-17 found 2 blockers:** (1) a QUICK multi-WAN-failover floating rule passes VLAN20->internet before interface rules, so the original clamp was INEFFECTIVE - fixed (scripts now prepend a dedicated floating block, don't touch the shared failover rule); (2) the OPNsense guest agent (apply+rollback both use it) went unresponsive mid-review - scripts now gate on agent liveness. **Both blockers cleared 2026-07-17:** agent revived; corrected PHP php-l clean + dry-run validated (removes 3 interface passes, prepends floating internet-block, appends interface block, failover rule untouched); `configctl filter reload`=rc.filter_configure confirmed. Apply gated on agent liveness. **Awaiting owner go.** Home-Lab #31. |
 | **Supermicro CVE-2026-3821: check X10 exposure (owner)** | `OPEN` (5 min) | CVE still RESERVED publicly (2026-07-17); details only on the Supermicro Security Center (browser). Owner: open the advisory from the email, check if X10 boards are affected + fixed firmware for X10. Randy = X10DRU-i+, BMC fw 3.94, VLAN 20 isolated. If a fixed X10 BMC firmware exists, flash is low-risk (no host reboot) - hand off to a session to stage. |
 | **VLAN 1 egress lockdown - enforcing** | `OPEN` (deliberately deferred) | Phase 1 (infra-scoped, log-only observe) is deployed and healthy (catch-all 0 hits, verified 2026-07-15). NOT rushed to enforce - owner chose to wait 2026-07-14, and there are real prereqs. **Enforce-phase plan (GUI, since the egress API key is now read-only):** (1) DHCP-reserve Ares .199/.100 so the exemption can't drift; (2) add multicast/broadcast pass (224.0.0.0/4, 239.0.0.0/8, 255.255.255.255) or UniFi .2 discovery gets blocked/noisy; (3) decide whether to exclude network gear .2/.50/.176 (legit phone-home); (4) add CDN ranges for RKE2 image pulls + switch Mist; (5) consider IPv6 egress (v4-only so far); (6) then flip rule 940 `c7fed07f` action pass->block (keep log). Rollback: set 940 back to pass. See `project-security-vlan-segmentation` memory. |
 
@@ -116,6 +115,16 @@ _Last full reconcile: 2026-07-15._
 ---
 
 ## Recently closed (this session)
+
+**VLAN 20 (BMC) egress clamp APPLIED + VERIFIED (2026-07-17, segmentation Phase 1.5 done).**
+Removed the 3 "trusted->{mgmt,servers,internet}" opt1 passes; added a floating quick
+internet-block that PRECEDES the multi-WAN failover pass (pf line 97 < 103, both quick =
+first-match drop) + an interface block+log. Pre-flight caught 2 blockers first (the quick
+failover floating rule that made the naive clamp ineffective; the flaky guest agent) - both
+cleared, applied via checkpointed steps. Verified in live pf + filter log; BMC mgmt (L2)
+intact, estate healthy, failover rule untouched. Rollback point on box + gated rollback
+script. Home-Lab #30/#31.
+
 
 **OPNsense DR backup: endpoint staleness CONFIRMED and FIXED (2026-07-17).** The
 `VERIFY` concern was REAL, not a misdiagnosis (an intermediate wrong call by this
