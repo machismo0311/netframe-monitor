@@ -93,7 +93,6 @@ _Last full reconcile: 2026-07-15._
 | Item | Status | Notes |
 |---|---|---|
 | **Home Assistant: future add-ons / IoT VLAN 40** | `PASSIVE` | Mosquitto/ESPHome/Zigbee2MQTT as hardware arrives (Zigbee stick -> USB passthrough on pve5); when first IoT devices land on VLAN 40, add OPNsense HA(.60)->VLAN40 rules + mDNS strategy. Details in the install runbook. |
-| **Home Assistant: OPNsense static reservation (NOT actually done)** | `OPEN` | 2026-07-17: a parallel session's commit claimed "HA static-mapped to .60 (mapping item closed)" but config-backup + live config prove **no reservation for bc:24:11:27:b2:5c exists in OPNsense config.xml**. HA VM 110 is DHCP (`ipv4.method:auto`) currently holding .60 = a lease, not a guaranteed IP. Drift risk: on renewal/reboot HA could move off .60, breaking the Pi-hole DNS record homeassistant.netframe.local->.60 AND the app URL. Fix in **GUI** (API key is read-only, and .60 is outside the .100-.199 pool so out-of-pool maps are accepted): Services > DHCPv4 > [LAN] add static mapping bc:24:11:27:b2:5c -> 192.168.10.60, save+apply. Then confirm the next nightly backup's log shows a fresh 'config last modified' date. |
 | **VoIP** | `OPEN` | FreePBX + 5x Cisco CP-8841 phones (deferred, post core infra). |
 | **Cyberpunk monitoring dashboard** | `OPEN` | Live API integration for the wall dashboard. |
 | **CCNA study cadence** | `OPEN` | Personal/study item (owner). |
@@ -117,14 +116,24 @@ _Last full reconcile: 2026-07-15._
 
 ## Recently closed (this session)
 
-**OPNsense DR backup: verified HEALTHY, not broken (2026-07-17).** The `VERIFY`
-"endpoint staleness" concern was a MISDIAGNOSIS: the endpoint faithfully returns
-live config; config.xml genuinely had not changed since 2026-07-13 09:43 (last
-change = a firewall addRule), so nightly "no change to commit" was correct. The
-cron is healthy (ran 07-15/16/17). Hardened `backup.sh` anyway (repo commit
-fac9452): each run now logs the config's internal revision date so idle-vs-stuck
-is obvious, plus a 45-day dead-man WARN. The scare surfaced a REAL issue: the HA
-.60 static reservation was never persisted (re-opened above).
+**OPNsense DR backup: endpoint staleness CONFIRMED and FIXED (2026-07-17).** The
+`VERIFY` concern was REAL, not a misdiagnosis (an intermediate wrong call by this
+session, corrected once the live config was read on the box). `/api/core/backup/download/this`
+served config cached at revision 2026-07-13 while the LIVE `/conf/config.xml` was
+2026-07-16 — so the DR backup silently dropped the HA static map and every other
+change for 3 days. **Fix (repo commits fac9452 + c5e6afb):** `backup.sh` now reads
+the live config directly via the OPNsense VM's qemu guest agent (Ares -> ssh pve2 ->
+`qm guest exec 100` -> gzip/base64 `/conf/config.xml`) — cache-proof and authoritative,
+with hard validation (XML header + `</opnsense>` close + size floor) so a partial read
+never overwrites a good backup. First run captured the true 07-16 config; DR backup
+now verified to contain the HA map. LESSON: verify a DR backup against the authoritative
+source (the file on the box), not the same channel that produces it.
+
+**Home Assistant OPNsense static reservation: DONE (verified 2026-07-17).** A prior
+session DID complete it correctly on 07-16 (bc:24:11:27:b2:5c -> 192.168.10.60); the
+stale backup endpoint had hidden it. Verified in the running dhcpd (`host s_lan_2`) AND
+persistent config.xml AND now the DR backup. HA holds .60 as a real reservation, not a
+droppable lease. The "in-pool GUI rejection" note was moot (.60 is out-of-pool).
 
 
 **Home Assistant owner account CLAIMED (2026-07-17):** the unclaimed-instance
