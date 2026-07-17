@@ -97,7 +97,7 @@ _Last full reconcile: 2026-07-15._
 
 | Item | Status | Notes |
 |---|---|---|
-| **pve3 physical revival + post-outage cleanup** | `OPEN` | pve3 hard-down since 2026-07-16 ~06:55 EDT (suspected power/UPS fault; WoL no response). NPM (101) + Grafana (103) were PBS-restored to **pve4** and now LIVE THERE. On revival: check UPS/PSU first, let 102/105/106/107/201 autostart, delete orphaned `pve/vm-101-disk-0` + `vm-103-disk-0` LVs on pve3, decide migrate-back, find root cause. Full checklist: `Home-Lab/vault/Runbook/Pve3-Outage-Recovery-2026-07-16.md`. |
+| pve3: BIOS "power on after AC loss" + e1000e recurrence watch | `OPEN`/`PASSIVE` | BIOS flag needs a console visit (headless WoL only works after a clean shutdown, not a hang). e1000e: offloads now off; if hangs recur, InterruptThrottleRate or a discrete NIC. |
 | Randy: mark the dead PCIe slot on the chassis | `OPEN` | So it is never reused (Randy-PCIe-Slot-Recovery runbook). |
 | Randy: re-secure re-routed SAS cables + watch CMOS battery | `OPEN` | Same runbook. |
 
@@ -110,6 +110,16 @@ _Last full reconcile: 2026-07-15._
 ---
 
 ## Recently closed (this session)
+
+**pve3 outage RESOLVED (2026-07-16 evening):** real root cause = e1000e NIC
+Hardware Unit Hang at 06:55:04 (box never lost power; 22,605 kernel msgs, 12.5h
+wedged - why WoL failed all day). Fix persisted (tso/gso off on nic0). All guests
+autostarted, cp1 rejoined (RKE2 3/3), NPM+Grafana migrated back (--bwlimit),
+orphan LVs cleaned, prometheus container manually restarted, every front + full
+netframe cycle verified green, recovery DM delivered. Full record:
+`Home-Lab/vault/Runbook/Pve3-Outage-Recovery-2026-07-16.md`. Remaining spin-offs:
+RKE2 failover test (HA section), BIOS auto-power-on (below), e1000e recurrence watch (PASSIVE).
+
 
 **UNREACHABLE verdict + Grafana-independent node-down DM (PR #63, 2026-07-16):**
 `classify()` now yields UNREACHABLE on ssh transport failure (line-start-keyed on
