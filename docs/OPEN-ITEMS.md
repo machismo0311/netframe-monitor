@@ -21,7 +21,7 @@ _Last full reconcile: 2026-07-15._
 | Item | Status | Notes |
 |---|---|---|
 | **WAN failover - FirstNet 5G (MR7400)** | `IN-PROGRESS` | Multi-step implementation checklist in `Home-Lab/vault/Runbook/WAN-Failover-FirstNet-MR7400-Plan-2026-07-12.md` (remove legacy .1.1 VIP, cable MR7400 to nic2, pve2 vmbr2, OPNsense WAN2 failover group, test, WAN2-down Grafana alert). The #1 SPOF (single WAN) reducer. |
-| **OPNsense CARP HA pair** | `OPEN` | Removes the top-ranked SPOF (OPNsense = 1 VM on pve2). Part of the HA roadmap. |
+| **OPNsense CARP HA pair** | `IN-PROGRESS` | **Build plan: `Home-Lab/vault/Runbook/OPNsense-CARP-HA-Plan-2026-07-22.md`** (4 phases: build backup node → renumber master to CARP VIPs → HA config-sync + Kea-DHCP HA → failover/load test). Removes the top-ranked SPOF (OPNsense = 1 VM on pve2). Both nodes target **OPNsense 25.7** (Kea v3, ISC still a fallback; 26.1 is Kea-only → hold). Owner sourcing the backup host as of 2026-07-22. Direct durability fix for the 2026-07-20 DHCP outage. |
 | **DAC 10G uplink -> fiber** | `OPEN` | `xe-0/2/3 -> UniFi SFP2`: replace the DAC with fiber optics. |
 | **VLAN 30 trunk -> pve4 + pve5 ports** | `OPEN` (30-min window) | Un-pins NPM/Vaultwarden/OpenWebUI from pve3 so today's 13h vault-outage class becomes a 15-min PBS restore to any node (AAR follow-on). RISK: live EX3400 change on ports carrying corosync - use `commit confirmed 5`, additive tag only (no new cables = no loop paths), cluster survives both ports dropping (5/7 quorate). Needs EX3400 creds via break-glass. Widens VLAN30 L2 domain to two more (already-trusted) node ports. |
 
