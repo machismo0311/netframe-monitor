@@ -53,7 +53,7 @@ student leaves / semester ends -> roster row flipped to left -> playbook run
 - [ ] **1.1 Update the Student Guide PDF ask.** The guide currently tells students to
       send "the key line + your name". It must ask for everything the roster needs:
       **full name, email, pubkey** (Discord handle implicit). One-line edit in
-      `QuarkyLab-Student-Guide.tex` Step 1 + recompile.
+      `the GPU research node-Student-Guide.tex` Step 1 + recompile.
 - [ ] **1.2 Roster template file** committed next to the playbook (empty, with the
       0.2 schema + comments) so filling it is copy-paste per student.
 - [ ] **1.3 (Optional QoL)** a tiny `roster-add.sh` prompt script on Ares that
@@ -62,7 +62,7 @@ student leaves / semester ends -> roster row flipped to left -> playbook run
 
 ## Phase 2 - The Ansible role (`student_access` in `Home-Lab/playbooks`)
 
-- [ ] **2.1 Inventory + plumbing.** Add QuarkyLab (`192.168.10.179`, root) to the
+- [ ] **2.1 Inventory + plumbing.** Add the GPU research node (`<REDACTED-IP>`, root) to the
       playbooks inventory (hardening role already reaches the fleet from Ares).
       New playbook `student-access.yml` -> role `student_access`, reads the
       vaulted roster.
@@ -87,11 +87,11 @@ student leaves / semester ends -> roster row flipped to left -> playbook run
       local `out/welcome-<user>.txt` on Ares - so "send them their username" is
       copy-paste, not composition.
 - [ ] **2.6 Pre-wipe backup assert.** Before any wipe, check the PBS
-      `quarkylab-workspace` snapshot is <24h old (query via
-      `proxmox-backup-client snapshot list` or the backup_verify JSON on Randy);
+      `<gpu-research-node>-workspace` snapshot is <24h old (query via
+      `proxmox-backup-client snapshot list` or the backup_verify JSON on the storage host);
       abort the wipe if stale. This makes offboarding safe even if a student asks
       for their files back later.
-- [ ] **2.7 Discord summary.** Reuse the `/etc/quarkylab-alert.conf` webhook to post
+- [ ] **2.7 Discord summary.** Reuse the `/etc/<gpu-research-node>-alert.conf` webhook to post
       "onboarded N / offboarded M / unchanged K" after each run.
 - [ ] **2.8 Idempotency test.** Two consecutive runs -> second run reports zero
       changes.
@@ -113,7 +113,7 @@ student leaves / semester ends -> roster row flipped to left -> playbook run
       policy via the CF API. Removing a user frees their seat, so the 50-seat pool
       recycles every semester. Until then, key-only gating means onboard/offboard
       is complete without this.
-- [ ] **4.2 Runbook updates:** `QuarkyLab-Account-Onboarding.md` gets a "primary
+- [ ] **4.2 Runbook updates:** `the GPU research node-Account-Onboarding.md` gets a "primary
       path = playbook, manual `add-cluster-key.sh` = fallback" section; semester
       start/end checklists (start: roster -> run -> hand out welcomes; end: flip
       all to `left` -> confirm run -> verify Access seats freed).
@@ -136,7 +136,7 @@ student leaves / semester ends -> roster row flipped to left -> playbook run
       pubkeys parse, NO duplicate pubkeys across users, no duplicate slots, unique
       emails, active count <= 20, semester ID matches an expected var.
 - [ ] **B.4 Tunnel = SPOF, monitor it:** netframe_monitor service check + Grafana
-      alert on the `cloudflared` unit on QuarkyLab (single ingress for the class).
+      alert on the `cloudflared` unit on the GPU research node (single ingress for the class).
       Canary (B.2) covers end-to-end; this covers fast detection.
 - [ ] **B.5 Enable Cloudflare Access BEFORE the semester** (the Zero-Trust signup +
       card is the only external dependency; don't do it the week students arrive).

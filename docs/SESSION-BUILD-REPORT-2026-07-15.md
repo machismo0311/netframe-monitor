@@ -3,9 +3,9 @@
 **Date:** 2026-07-15
 **Author:** Kyle Mason (masonkr@gmail.com)
 **Scope:** One working session that began with publishing the Operations Console and grew
-into a full trustworthiness program for Jarvis, the NetFRAME AI-operations platform.
+into a full trustworthiness program for the monitoring host, the NetFRAME AI-operations platform.
 **Repos touched:** `netframe-monitor` (private, PRs #30–#48), `Home-Lab` (public, PRs
-#10–#14), `dotfiles` (submodule pointer bumps), Vaultwarden, and live nodes.
+#10–#14), `dotfiles` (submodule pointer bumps), the password vault, and live nodes.
 **Deployment discipline throughout:** one change at a time; fixtures/tests first; eval
 baseline before and after; merge only on explicit CI PASS; deploy; verify live; bump the
 submodule pointer.
@@ -38,7 +38,7 @@ tests before they shipped.
 
 1. **Publish the Operations Console** → needed an NPM proxy + DNS.
 2. Doing DNS revealed a **cluster-wide DNS gap** (vault/grafana/wazuh unresolvable).
-3. Fixing DNS made **Vaultwarden reachable again**, which unblocked filing secrets.
+3. Fixing DNS made **the password vault reachable again**, which unblocked filing secrets.
 4. The console needed a **self-guard** (its NPM access list can silently detach).
 5. Publishing a docs runbook exposed that **docs-only PRs could not merge** (CI path filter).
 6. A health check revealed the **llm_router loopback-bind outage** (Open WebUI dead for a day).
@@ -59,13 +59,13 @@ Every problem encountered, what caused it, and how it was fixed.
 
 | # | Issue | Root cause | Remedy | PR |
 |---|---|---|---|---|
-| I-1 | Console reachable only by raw IP | No NPM proxy host / DNS for `console.kylemason.org` | NPM host id 8 → Jarvis:8809, LE cert (CF DNS-01), Basic auth, 200s proxy timeout for deep-model queries | Home-Lab #10 |
+| I-1 | Console reachable only by raw IP | No NPM proxy host / DNS for `<public-endpoint>` | NPM host id 8 → the monitoring host:8809, LE cert (CF DNS-01), Basic auth, 200s proxy timeout for deep-model queries | Home-Lab #10 |
 | I-2 | **vault/grafana/wazuh unresolvable LAN-wide** | Only `homepage`/`health` had Pi-hole local records; the rest were rebind-stripped for every Pi-hole client | Added the 4 missing local DNS records via password-free `pct exec` on the primary Pi-hole; nebula-sync to secondary | Home-Lab #10 |
-| I-3 | `bw` (Bitwarden CLI) silently stopped syncing | It couldn't resolve `vault.kylemason.org` (same gap as I-2) - a DR trap: the vault is unreachable exactly when you need it | Fixed by I-2; documented the deadlock and the password-free break | Home-Lab #10 |
+| I-3 | `bw` (Bitwarden CLI) silently stopped syncing | It couldn't resolve `<public-endpoint>` (same gap as I-2) - a DR trap: the vault is unreachable exactly when you need it | Fixed by I-2; documented the deadlock and the password-free break | Home-Lab #10 |
 | I-4 | Console backend could go public unnoticed | NPM applies `auth_basic` in the access phase before `proxy_pass`; a detached access list = public console, no alarm | `console_auth` self-guard (401 = OK, 200 = WARN), separate from `page_auth` | #31 |
 | I-5 | **Docs-only PRs stuck BLOCKED** | `ci.yml` supplied both required checks but was path-filtered to `scripts/**`; a docs PR triggered zero checks, and a required check that never runs stays pending forever | Dropped the path filter from `ci.yml`; kept it on the expensive non-required workflows | Home-Lab #11, #12 |
-| I-6 | NPM admin password existed only in the owner's head | Never filed; no `INITIAL_ADMIN_PASSWORD` in compose | Filed in Vaultwarden, round-trip-verified against the NPM API | (Vaultwarden) |
-| I-7 | Jarvis netframe restic passphrase unfiled | The existing vault item covered only the Ares repo; the Jarvis repo's passphrase lived solely on the host | Filed the Jarvis passphrase; functionally verified it opens the repo; reorganized the whole vault into 4 folders | (Vaultwarden) |
+| I-6 | NPM admin password existed only in the owner's head | Never filed; no `INITIAL_ADMIN_PASSWORD` in compose | Filed in the password vault, round-trip-verified against the NPM API | (the password vault) |
+| I-7 | the monitoring host netframe restic passphrase unfiled | The existing vault item covered only the Ares repo; the monitoring host repo's passphrase lived solely on the host | Filed the monitoring host passphrase; functionally verified it opens the repo; reorganized the whole vault into 4 folders | (the password vault) |
 | I-8 | **Open WebUI chat dead for a day** | `llm_router` bind regressed `0.0.0.0`→`127.0.0.1` (live env drifted from the repo's documented value). Service stayed "active", localhost answered 200, so nothing alerted; but Open WebUI is on another host | Restored `0.0.0.0`; added an iptables allowlist on :8000 (no auth of its own); ordered lock before the service at boot | Home-Lab #13 |
 | I-9 | Monitoring never noticed I-8 | The monitor had zero checks over `llm_router`, and a localhost probe would have read 200 throughout | `llm_router` check probing **through NPM** (the real consumer path), not localhost | #32 |
 | I-10 | **Model recommended prohibited actions, unscreened** | The eval gated on prohibited substrings; nothing on the live path did. ~1 run in 5 the 7B recommended power-cycle (EVT-004) or replacing a healthy drive (EVT-003), reaching the operator | Deterministic prohibited-recommendation screen on the live path; made universal; extended to Discord | #35, #36, #37, Home-Lab #14 |
@@ -132,7 +132,7 @@ reached an operator, several of them introduced during this very session.
 - **POL-002/POL-009 shared-predicate coupling:** narrowing POL-002 silently broke POL-009. Split into separate gates, pinned by an identity test. (#38)
 - **Eval sandbox incompleteness (×2):** the interpreter imported `netframe_policy` then `netframe_evidence`, which the eval sandbox didn't copy → every scenario crashed (0/8). Fixed, then guarded by a test that derives the requirement from source so it can't happen a third time. (#36, #42)
 - **The flaky "8/8" was luck:** NF-AIOPS-003 called the hard gates "stable 8/8 across 3 runs." At the real ~20% model-misbehavior rate, three clean runs is a coin flip. The policy screen is what made it actually safe.
-- **Inert sudoers pin:** the first Phase-3 pin targeted a `monitor` user that doesn't exist on Jarvis (the collector runs locally as root there). Caught via `visudo -c`, removed. (#40)
+- **Inert sudoers pin:** the first Phase-3 pin targeted a `monitor` user that doesn't exist on the monitoring host (the collector runs locally as root there). Caught via `visudo -c`, removed. (#40)
 - **Chief report tried a prohibited rec on its FIRST gated run:** the 72B executive report recommended an unevidenced drive replacement; the screen blocked it live. (post-#36)
 
 ---
@@ -141,7 +141,7 @@ reached an operator, several of them introduced during this very session.
 
 ### 6.1 NF-AIOPS-004: Configuration Correctness
 - **Proposal** established the central insight: expanding the drift detector would NOT have caught the I-8 outage, because it compares production to a blessed snapshot of production, not to Git. Re-scoped to conformance against declared intent.
-- **Phase 1 (#33):** added the service tier to the dependency graph (`ollama`, `llm_router`, `npm`, `open_webui`, …). Fixed a mis-attribution that would have blamed Grafana for a Jarvis outage.
+- **Phase 1 (#33):** added the service tier to the dependency graph (`ollama`, `llm_router`, `npm`, `open_webui`, …). Fixed a mis-attribution that would have blamed Grafana for a the monitoring host outage.
 - **Phase 2 (#34):** user-impact probes + GPU admission control (§4.4).
 - **Phase 3 (#40):** the conformance wrapper (§4.1), three separate dimensions, secrets-safe, observe-only.
 
@@ -166,7 +166,7 @@ reached an operator, several of them introduced during this very session.
 **netframe-monitor (private):**
 | PR | Title |
 |---|---|
-| #30 | Jarvis Operations Console (retrieval-augmented chat UI) |
+| #30 | the monitoring host Operations Console (retrieval-augmented chat UI) |
 | #31 | Self-guard the operations console access list |
 | #32 | Watch llm_router over its real network path |
 | #33 | NF-AIOPS-004 Phase 1: service tier in the dependency model |
@@ -189,16 +189,16 @@ reached an operator, several of them introduced during this very session.
 | #11 | CI: run lint/syntax on every PR (docs PRs can merge) |
 | #12 | Runbook: the required-check path-filter trap |
 | #13 | llm_router: iptables allowlist + loopback-bind trap runbook |
-| #14 | jarvis-oncall: Discord bot behind the shared policy boundary |
+| #14 | <monitor-host>-oncall: Discord bot behind the shared policy boundary |
 
-**Design documents** (`~/jarvis-ai-ops/`, LaTeX PDFs): NF-AIOPS-004 (config correctness),
+**Design documents** (`~/<monitor-host>-ai-ops/`, LaTeX PDFs): NF-AIOPS-004 (config correctness),
 NF-AIOPS-005 (evidence scoring).
 
 ---
 
 ## 8. Owner Follow-Ups (open items)
 
-- **NPM admin password** is now in Vaultwarden but also exists in this session's transcript; rotation offered, deferred to a keyboard session.
+- **NPM admin password** is now in the password vault but also exists in this session's transcript; rotation offered, deferred to a keyboard session.
 - **Console/chat and ghreview** are policy-gated but **not** evidence-annotated (conversational / portfolio, not material-finding reports) - candidate follow-ups, recorded in the inventory as deliberate.
 - **Evidence-scoring weights** are calibrated to 7 frozen fixtures; revisit if real incidents suggest recalibration (each score ships its factor breakdown, so a wrong number is legible).
 - **llm_router / Open WebUI** are deliberately out of the policy boundary (general-purpose chat); revisit if they ever gain tool-calling into the estate.
