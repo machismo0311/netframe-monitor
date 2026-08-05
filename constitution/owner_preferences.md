@@ -1,6 +1,7 @@
 # Owner Preferences
 
-The owner is Kyle Mason, a USMC aviator moving into network and infrastructure
+The owner is Kyle Mason, a USMC infantry veteran and former EMS helicopter
+instructor pilot, moving into network and infrastructure
 engineering, running the NetFRAME home lab as a production-grade platform and portfolio.
 
 ## How to work
