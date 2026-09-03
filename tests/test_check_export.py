@@ -155,7 +155,8 @@ def test_export_writes_atomically_and_leaves_no_temp_file():
     with tempfile.TemporaryDirectory() as td:
         assert mon.export_metrics(report(), directory=td, name="t.prom", now=42) is True
         assert os.listdir(td) == ["t.prom"]
-        body = open(os.path.join(td, "t.prom")).read()
+        with open(os.path.join(td, "t.prom")) as fh:
+            body = fh.read()
         assert "netframe_monitor_export_timestamp_seconds 42" in body
         assert stat.S_IMODE(os.stat(os.path.join(td, "t.prom")).st_mode) == 0o644
 
@@ -179,11 +180,13 @@ def test_each_export_replaces_the_file_rather_than_rewriting_it_in_place():
 def test_a_failed_export_keeps_the_previous_document_intact():
     with tempfile.TemporaryDirectory() as td:
         assert mon.export_metrics(report(), directory=td, name="t.prom", now=100) is True
-        before = open(os.path.join(td, "t.prom")).read()
+        with open(os.path.join(td, "t.prom")) as fh:
+            before = fh.read()
         os.chmod(td, 0o500)                       # writes now fail
         try:
             assert mon.export_metrics(report(), directory=td, name="t.prom", now=200) is False
-            after = open(os.path.join(td, "t.prom")).read()
+            with open(os.path.join(td, "t.prom")) as fh:
+                after = fh.read()
         finally:
             os.chmod(td, 0o700)
         assert after == before                     # evidence preserved, never truncated
@@ -202,13 +205,15 @@ def test_the_timestamp_advances_between_cycles():
     with tempfile.TemporaryDirectory() as td:
         mon.export_metrics(report(), directory=td, name="t.prom", now=100)
         mon.export_metrics(report(), directory=td, name="t.prom", now=1000)
-        assert "netframe_monitor_export_timestamp_seconds 1000" in open(os.path.join(td, "t.prom")).read()
+        with open(os.path.join(td, "t.prom")) as fh:
+            assert "netframe_monitor_export_timestamp_seconds 1000" in fh.read()
 
 
 # ---- the exporter must not become a second parser ----
 
 def test_the_exporter_reads_the_monitors_own_verdicts_and_reparses_nothing():
-    src = open(os.path.join(BASE, "netframe_monitor.py")).read()
+    with open(os.path.join(BASE, "netframe_monitor.py")) as fh:
+        src = fh.read()
     start = src.index("def render_metrics(")
     body = src[start:src.index("def export_metrics(")]
     for parser in ("json.load", "parse_backup_verify", "parse_hardening_drift",

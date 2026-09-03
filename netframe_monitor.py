@@ -23,9 +23,9 @@ import json
 import os
 import re
 import socket
-import time
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 BASE = "/opt/netframe-monitor"
