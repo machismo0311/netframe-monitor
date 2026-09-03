@@ -60,6 +60,15 @@ BACKUP_VERIFY_MAX_AGE_H = 26  # written ~06:00 daily; older => stale
 # runs the hardening role in --check mode). Unprivileged cat, same pattern as backup_verify.
 HARDENING_DRIFT = "cat /var/log/netframe-monitor/hardening-drift.json 2>/dev/null"
 HARDENING_DRIFT_MAX_AGE_H = 30  # daily cron; older => stale (dead cron / control node down)
+# Restore-verify evidence from the monthly Ares restic restore drill, published to Randy by
+# playbooks/scheduling/publish-restore-evidence.sh. Same unprivileged-cat pattern as the two above.
+RESTORE_VERIFY = "cat /var/log/netframe-monitor/restore-verify.json 2>/dev/null"
+# Derived from the drill's ACTUAL cadence rather than picked. The timer is OnCalendar=monthly with
+# RandomizedDelaySec=1h, so the longest legitimate gap between two runs is the longest month plus
+# the jitter (31d + 1h). The remaining 24h is grace for execution time, one monitor collection
+# cycle, and a brief control-node outage across a month boundary. A monthly drill must NOT read as
+# stale merely because 30 days passed and the next scheduled run has not come round yet.
+RESTORE_VERIFY_MAX_AGE_H = 31 * 24 + 1 + 24  # 769h
 GPU = (
     "/usr/bin/nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,"
     "memory.used,memory.total --format=csv,noheader,nounits"
@@ -177,7 +186,7 @@ VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2,
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU, "llm_router_conformance": LLM_ROUTER_CONFORMANCE}},
-    "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY, "hardening_drift": HARDENING_DRIFT}},
+    "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY, "hardening_drift": HARDENING_DRIFT, "restore_verify": RESTORE_VERIFY}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
     "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
     # prometheus check rides with CT 103, which moved to pve4 2026-07-16 (AAR rec 12:
@@ -373,6 +382,42 @@ def parse_hardening_drift(out):
             "stale": age_h is None or age_h > HARDENING_DRIFT_MAX_AGE_H}
 
 
+def parse_restore_verify(out):
+    """Parse the monthly restore-verify evidence (same JSON-cat pattern as backup_verify).
+
+    Keeps THREE facts apart, because collapsing them is how a recovery claim becomes untrue:
+      what the drill PROVED      status + level + failure_class
+      whether it was DELIVERED   present
+      whether it is RECENT       age_hours + stale
+
+    `claim` states the recovery level literally. LEVEL 2 means one file was extracted from an
+    identified snapshot into a scratch directory. It is NOT a boot test and NOT an application
+    recovery test, and this parser deliberately has no wording that could be read as either.
+    """
+    data = _backup_verify_load(out)
+    if data is None:
+        return {"present": False}
+    age_h = _backup_verify_age_h(data)
+    level = data.get("level")
+    # A timestamp in the future is not fresh evidence, it is a broken clock somewhere. Allow an
+    # hour of skew, then refuse to treat it as recent; otherwise a wrong clock reads as OK forever.
+    clock_anomaly = age_h is not None and age_h < -1
+    return {"present": True,
+            "status": data.get("status"),
+            "level": level,
+            "level_name": data.get("level_name"),
+            "claim": ("LEVEL %s %s" % (level, data.get("level_name")))
+                     if level is not None else "NOTHING_PROVEN",
+            "snapshot": data.get("snapshot") or None,
+            "failure_class": data.get("failure_class") or None,
+            "stale_lock_recovered": bool(data.get("stale_lock_recovered")),
+            "generated": data.get("generated"),
+            "age_hours": age_h,
+            "clock_anomaly": clock_anomaly,
+            "stale": age_h is None or age_h > RESTORE_VERIFY_MAX_AGE_H or clock_anomaly,
+            "source": "randy:/var/log/netframe-monitor/restore-verify.json"}
+
+
 def parse_backup_verify(out):
     data = _backup_verify_load(out)
     if data is None:
@@ -556,6 +601,7 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "smart": parse_smart, "journal_errors": parse_journal, "pbs": parse_pbs,
            "backup_verify": parse_backup_verify,
            "hardening_drift": parse_hardening_drift,
+           "restore_verify": parse_restore_verify,
            "guests": parse_guests, "grafana": parse_grafana,
            "prometheus": parse_prometheus, "loki": parse_loki, "pihole": parse_pihole,
            "wazuh": parse_wazuh, "page_auth": parse_page_auth,
@@ -690,6 +736,20 @@ def classify(name, rc, out):
         if age_h is None or age_h > BACKUP_VERIFY_MAX_AGE_H:
             return "WARN"  # stale report => dead cron/timer on Ares
         return "OK" if data.get("overall") == "pass" else "WARN"
+    if name == "restore_verify":
+        d = parse_restore_verify(out)
+        # Every non-OK case is WARN, matching backup_verify: the monitor's vocabulary is coarse on
+        # purpose. WHICH problem it is lives in the parsed metrics, so REPOSITORY_LOCKED is never
+        # rendered as corruption. That conflation was the defect repaired on 2026-09-02.
+        if not d.get("present"):
+            return "WARN"        # report missing, unreadable, or not JSON
+        if d.get("stale"):
+            return "WARN"        # the monthly drill did not run, or the clock is wrong
+        if d.get("status") != "pass":
+            return "WARN"        # it ran and did not prove a restore
+        if (d.get("level") or 0) < 2:
+            return "WARN"        # passed, but did not reach RESTORE_EXTRACTED
+        return "OK"
     if name == "hardening_drift":
         d = parse_hardening_drift(out)
         if not d.get("present"):
@@ -760,6 +820,14 @@ def flatten_metrics(nodes):
                 flat[f"{host}.backup_verify.ok"] = 1 if ok else 0
                 if m.get("age_hours") is not None:
                     flat[f"{host}.backup_verify.age_hours"] = m["age_hours"]
+            if name == "restore_verify":
+                ok = (m.get("present") and m.get("status") == "pass"
+                      and (m.get("level") or 0) >= 2 and not m.get("stale"))
+                flat[f"{host}.restore_verify.ok"] = 1 if ok else 0
+                if m.get("level") is not None:
+                    flat[f"{host}.restore_verify.level"] = m["level"]
+                if m.get("age_hours") is not None:
+                    flat[f"{host}.restore_verify.age_hours"] = m["age_hours"]
     return flat
 
 
