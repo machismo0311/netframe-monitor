@@ -406,8 +406,8 @@ def parse_restore_verify(out):
             "status": data.get("status"),
             "level": level,
             "level_name": data.get("level_name"),
-            "claim": ("LEVEL %s %s" % (level, data.get("level_name")))
-                     if level is not None else "NOTHING_PROVEN",
+            "claim": "NOTHING_PROVEN" if level is None
+                     else f"LEVEL {level} {data.get('level_name')}",
             "snapshot": data.get("snapshot") or None,
             "failure_class": data.get("failure_class") or None,
             "stale_lock_recovered": bool(data.get("stale_lock_recovered")),
