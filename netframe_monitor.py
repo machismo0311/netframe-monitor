@@ -23,6 +23,7 @@ import json
 import os
 import re
 import socket
+import time
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -36,6 +37,23 @@ HISTORY_CAP = 3400  # ~35 days at the 15-min cadence, so the 14d predict and 30d
 
 CHECK_TIMEOUT = 120  # Randy's SMART sweep over 50+ SAS disks is the slow path
 RAW_EXCERPT = 1200   # chars of raw output kept per check in last_run.json
+
+# Prometheus textfile export. The collector already owns the semantics of every check, so the
+# normalized verdict is exported once, here, and Prometheus consumes THAT. Making Prometheus
+# re-parse backup-report.json / hardening-drift.json / restore-verify.json would duplicate the
+# parsers and let the two drift apart, which is the failure this avoids.
+#
+# Same directory netframe-run.sh already writes netframe.prom into, read by the node_exporter
+# textfile collector on this host. A separate FILE, not a separate pipeline: netframe.prom marks
+# the end of a whole netframe-run cycle, while this marks the end of a COLLECTOR pass, and the two
+# are written by different programs at different moments.
+TEXTFILE_DIR = "/var/lib/prometheus/node-exporter"
+TEXTFILE_NAME = "netframe_checks.prom"
+
+# Bounded by construction. `reason` may only ever be one of a small fixed vocabulary or empty, so
+# a label can never carry a free-form error string or an unbounded value.
+REASON_ABSENT, REASON_STALE = "ABSENT", "STALE"
+_REASON_MAX = 32
 
 # ---------------------------------------------------------------------------
 # Read-only diagnostic commands. Privileged ones use the full binary path and
@@ -768,6 +786,91 @@ def classify(name, rc, out):
     return "OK" if rc == 0 else "WARN"
 
 
+def check_reason(name, metrics):
+    """A bounded, low-cardinality reason for a non-OK report check, or "" when there is none.
+
+    Deliberately NOT the failure detail. `detail` carries captured stderr and belongs in the report,
+    not in a metric label. What survives here is the CLASS, which comes from a fixed vocabulary the
+    producers already define, sanitized so that a producer bug cannot turn a label into free text.
+    """
+    if not isinstance(metrics, dict):
+        return ""
+    if metrics.get("present") is False:
+        return REASON_ABSENT
+    if metrics.get("stale"):
+        return REASON_STALE
+    raw = ""
+    if name == "restore_verify":
+        raw = metrics.get("failure_class") or ""
+    elif name == "hardening_drift":
+        raw = "DRIFT" if metrics.get("any_drift") else ""
+    elif name == "backup_verify":
+        raw = "FAILED_CHECKS" if metrics.get("failed") else ""
+    clean = re.sub(r"[^A-Za-z0-9_]", "", str(raw)).upper()[:_REASON_MAX]
+    return clean
+
+
+def render_metrics(report, now=None):
+    """The textfile document. Pure function so it can be tested without a filesystem."""
+    ts = int(now if now is not None else time.time())
+    lines = [
+        "# HELP netframe_monitor_check_status Current netframe_monitor verdict per node and check.",
+        "# TYPE netframe_monitor_check_status gauge",
+    ]
+    seen = set()
+    for host, checks in sorted(report.get("nodes", {}).items()):
+        for name, c in sorted(checks.items()):
+            state = str(c.get("verdict", "UNKNOWN")).lower()
+            reason = check_reason(name, c.get("metrics"))
+            key = (host, name)
+            if key in seen:      # one series per node/check, never a duplicate
+                continue
+            seen.add(key)
+            lines.append(
+                f'netframe_monitor_check_status{{node="{host}",check="{name}",'
+                f'state="{state}",reason="{reason}"}} 1')
+    lines += [
+        "# HELP netframe_monitor_export_timestamp_seconds Unix time this export was written.",
+        "# TYPE netframe_monitor_export_timestamp_seconds gauge",
+        f"netframe_monitor_export_timestamp_seconds {ts}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def export_metrics(report, directory=TEXTFILE_DIR, name=TEXTFILE_NAME, now=None):
+    """Write the metrics atomically. Returns True on success.
+
+    ATOMICITY: written to a temporary file in the SAME directory and renamed over the target, so
+    node_exporter never reads a half-written document. A partial .prom is not merely noisy - it
+    makes the collector drop the whole file, so every series would vanish at once.
+
+    ON FAILURE the previous file is left in place rather than removed. Deleting it would destroy the
+    last known observation, and absence is not a safer signal than an old one: the export timestamp
+    inside the old file keeps ageing, so the monitor-export-stale rule takes over and the stale
+    values stop being trusted. Evidence is preserved AND it expires.
+    """
+    if not os.path.isdir(directory):
+        return False
+    target = os.path.join(directory, name)
+    tmp = os.path.join(directory, f".{name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w") as fh:
+            fh.write(render_metrics(report, now=now))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, target)
+        return True
+    except OSError as exc:
+        print(f"WARN: could not write {target}: {exc}", file=sys.stderr)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
 def flatten_metrics(nodes):
     """Compact numeric view for history.jsonl trend tracking."""
     flat = {}
@@ -888,6 +991,8 @@ def main():
             json.dump(report, fh, indent=2)
     except OSError as exc:
         print(f"WARN: could not write {STATE_FILE}: {exc}", file=sys.stderr)
+
+    export_metrics(report)
 
     verdicts = {f"{h}.{n}": c["verdict"]
                 for h, checks in report["nodes"].items() for n, c in checks.items()}
