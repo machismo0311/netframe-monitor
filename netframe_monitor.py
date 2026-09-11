@@ -194,6 +194,14 @@ CONSOLE_TRANSACT = f"/usr/bin/python3 {BASE}/netframe_transact.py console"
 # wrapper is still the reviewed, Git-tracked, arg-free artifact; being root itself, the
 # collector needs no sudoers pin for it on this host.
 LLM_ROUTER_CONFORMANCE = "/usr/local/sbin/nfm-llm-router-conformance"
+# Dual-WAN failover posture, read from OPNsense (VM 100) on pve2 through the same root-owned,
+# argument-free, sudoers-pinned wrapper pattern as nfm-prom-health. The wall dashboard must be able
+# to state "failover is armed" and "traffic is on WAN1" without inferring either, and neither fact
+# is reachable from the wall Pi: both live inside the OPNsense guest, and the Pi deliberately holds
+# no pve2 access and no OPNsense credential. Deriving it here publishes it through last_run.json,
+# which the Pi already reads over its existing forced command, so the wall gains the fact and gains
+# no privilege. Emits only a bounded key=value vocabulary.
+WAN_POSTURE = "sudo -n /usr/local/sbin/nfm-wan-posture"
 
 # Verdict severity. SKIPPED ranks at 0 alongside OK deliberately: an untested service must
 # never make the estate look unhealthy, so a skip cannot raise the overall verdict. It is
@@ -206,7 +214,9 @@ NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU, "llm_router_conformance": LLM_ROUTER_CONFORMANCE}},
     "randy":     {"ip": "192.168.10.187", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "pbs": PBS, "backup_verify": BACKUP_VERIFY, "hardening_drift": HARDENING_DRIFT, "restore_verify": RESTORE_VERIFY}},
     "quarkylab": {"ip": "192.168.10.179", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "zpool": ZPOOL, "gpu": GPU, "guests": QM_LIST}},
-    "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
+    "pve2":      {"ip": "192.168.10.204", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART,
+                                                 # OPNsense (VM 100) lives here, so the dual-WAN posture is read here.
+                                                 "wan_failover": WAN_POSTURE}},
     # prometheus check rides with CT 103, which moved to pve4 2026-07-16 (AAR rec 12:
     # alerting no longer shares a node with NPM/Vaultwarden); npm_dns stays with NPM on pve3.
     "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "npm_dns": NPM_DNS}},
@@ -562,6 +572,45 @@ def parse_llm_router_conformance(out):
     return m
 
 
+def parse_wan_posture(out):
+    """Parse the dual-WAN posture wrapper's key=value lines into typed, semantic fields.
+
+    Every field is UNKNOWN (None) unless the wrapper actually stated it. That asymmetry is the
+    whole point: this feeds a wall display whose green state means "a WAN1 failure is survivable",
+    and a missing field must never be read as a healthy one. The 2026-08/09 regression it guards
+    against was exactly this - one absent fact rendered as green for 25 days while the FirstNet
+    standby was dead.
+
+    `armed` is tri-state on purpose: True, False and None are three different operational
+    situations (protected / knowingly unprotected / not observed) and collapsing None into False
+    would turn "the collector could not look" into a false alarm."""
+    kv = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            kv[k.strip()] = v.strip()
+
+    def tri(key):
+        v = kv.get(key)
+        return True if v == "true" else False if v == "false" else None
+
+    source_ok = tri("source_ok")
+    armed = tri("armed") if source_ok else None          # a failed read states nothing about arming
+    path = kv.get("active_path") if source_ok else None
+    if path not in ("wan1", "wan2"):
+        path = None                                       # "unknown" and anything unexpected -> UNKNOWN
+    tiers = kv.get("tiers")
+    return {
+        "source_ok": source_ok,
+        "armed": armed,
+        "group": kv.get("group") if armed else None,
+        "tiers": int(tiers) if (tiers or "").isdigit() else None,
+        "active_path": path,
+        "active_netif": kv.get("active_netif") if source_ok else None,
+        "reason": kv.get("reason") if source_ok is False else None,
+    }
+
+
 def parse_transact(out):
     """Parse netframe_transact.py's key=value line. `reason` may contain spaces, so it is
     taken as the remainder of the line."""
@@ -627,7 +676,7 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "console_backend": parse_llm_router, "report_backend": parse_llm_router,
            "openwebui_reach": parse_llm_router, "console_transact": parse_transact,
            "llm_router_conformance": parse_llm_router_conformance,
-           "npm_dns": parse_npm_dns,
+           "npm_dns": parse_npm_dns, "wan_failover": parse_wan_posture,
            "net_config_change": parse_netlog, "net_syslog_flow": parse_netlog,
            "ups": parse_ups}
 
@@ -714,6 +763,17 @@ def classify(name, rc, out):
         if not d["enumerate_ok"] or d["total"] == 0:
             return "WARN"
         return "OK" if d["missing_count"] == 0 else "WARN"
+    if name == "wan_failover":
+        # The estate is protected only when a standby path is armed AND traffic is on the primary.
+        # Every other situation is operationally different, and none of them is OK:
+        #   source unreadable -> we cannot see the safety net, which is not the same as having one
+        #   armed is not True -> a WAN1 failure would be an internet outage, not a failover
+        #   active is wan2    -> already running ON the LTE standby, with nothing left to fall back to
+        #   active is unknown -> pf did not state the path, so "on the primary" is unproven
+        d = parse_wan_posture(out)
+        if d["source_ok"] is not True or d["armed"] is not True:
+            return "WARN"
+        return "OK" if d["active_path"] == "wan1" else "WARN"
     if name == "llm_router_conformance":
         # OK only when ALL three dimensions pass. But the per-dimension verdicts in the
         # metrics are what the interpreter reads to say WHICH failed (config -> edit the
@@ -907,6 +967,15 @@ def flatten_metrics(nodes):
                     v = m.get(dim)
                     if v in ("PASS", "FAIL"):
                         flat[f"{host}.llm_router_conformance.{dim}"] = 1 if v == "PASS" else 0
+            if name == "wan_failover":
+                # Tri-state fields flattened as SEPARATE series, and only when actually
+                # observed. Writing 0 for "not observed" would make a collector that could
+                # not reach pve2 indistinguishable in the history from a genuinely unarmed
+                # failover, and every trend built on it would then be wrong.
+                if m.get("armed") is not None:
+                    flat[f"{host}.wan_failover.armed"] = 1 if m["armed"] else 0
+                if m.get("active_path") is not None:
+                    flat[f"{host}.wan_failover.on_primary"] = 1 if m["active_path"] == "wan1" else 0
             if name.endswith("_transact"):
                 # Only record the trend when the probe actually ran. Writing 0 for a skip
                 # would make "we didn't test" indistinguishable from "it failed" in the

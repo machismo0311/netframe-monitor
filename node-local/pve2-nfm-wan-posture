@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""NetFRAME monitor: read-only dual-WAN failover posture from OPNsense (VM 100).
+
+Accepts NO arguments. Emits only a bounded key=value vocabulary - never config text, never a
+rule body, never a credential.
+
+WHY THIS EXISTS. The wall dashboard must be able to say "failover is armed" and "traffic is on
+WAN1" without believing it. Both facts live inside the OPNsense guest: the gateway groups and
+policy rules are in /conf/config.xml, and the path actually in force is in the running pf
+ruleset. Neither is reachable from the wall Pi, which by design holds no pve2 access and no
+OPNsense credential. So the fact is derived once, here, on the host that legitimately can, and
+published through last_run.json - which the Pi already reads through its existing forced command.
+
+WHY /conf/config.xml AND NOT THE BACKUP API. The OPNsense backup endpoint
+(/api/core/backup/download/this) served a stale config during the 2026-09 WAN2 investigation: it
+returned a 2026-07-13 snapshot that was missing three firewall rules, which produced two
+consecutive wrong "failover is not armed" findings. The live file is the only authority.
+
+ARMED IS A CONJUNCTION, NOT A LOOKUP. A gateway group that exists but that no enabled rule
+routes through is not failover, it is a dormant object. So armed requires BOTH a group with two
+or more tiers AND an enabled filter rule naming it. A disabled rule does not count.
+
+ACTIVE PATH IS MEASURED, NOT INFERRED. It is read from the live pf route-to target, never
+guessed from which gateways happen to be Online - the two disagree exactly when it matters most.
+"""
+import json
+import re
+import subprocess
+import sys
+
+VMID = "100"
+TIMEOUT = 25
+
+# pf netif -> semantic WAN path. An unrecognised netif yields UNKNOWN rather than a guess.
+NETIF_PATH = {"vtnet0": "wan1", "vtnet2": "wan2"}
+
+# Bounded failure vocabulary. A reason may only ever be one of these, so this output can never
+# carry a free-form error string off the host.
+R_EXEC, R_EMPTY, R_PARSE, R_AGENT = "EXEC_FAILED", "NO_OUTPUT", "PARSE_FAILED", "AGENT_ERROR"
+
+# Runs INSIDE the guest. The PHP walks the live config for gateway groups and the gateway named by
+# every ENABLED filter rule; pfctl reports the route-to actually programmed for policy-routed LAN
+# traffic. Output is three fixed line shapes and nothing else.
+GUEST_SH = (
+    'php -r "'
+    '\\$c=simplexml_load_file(\\"/conf/config.xml\\"); '
+    '\\$g=[]; foreach(\\$c->gateways->gateway_group as \\$x){ \\$g[(string)\\$x->name]=count(\\$x->item); } '
+    '\\$r=[]; foreach(\\$c->filter->rule as \\$x){ if(isset(\\$x->disabled)) continue; '
+    '\\$v=(string)\\$x->gateway; if(\\$v!==\\"\\") \\$r[\\$v]=1; } '
+    'foreach(\\$g as \\$n=>\\$t) echo \\"GRP \\$n \\$t\\n\\"; '
+    'foreach(array_keys(\\$r) as \\$n) echo \\"RULEGW \\$n\\n\\";"; '
+    'pfctl -sr 2>/dev/null | grep route-to | grep Local_Nets | head -1 '
+    '| sed -E "s/.*route-to \\(([a-z0-9]+) .*/PF \\1/"'
+)
+
+SAFE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
+
+
+def emit(**kv):
+    for k, v in kv.items():
+        print(f"{k}={v}")
+
+
+def fail(reason):
+    emit(source_ok="false", reason=reason)
+    sys.exit(0)          # a posture we cannot read is a reportable fact, not a crash
+
+
+def main():
+    if len(sys.argv) > 1 and any(a.strip() for a in sys.argv[1:]):
+        print("source_ok=false")
+        print("reason=ARGS_REFUSED")
+        return 0
+    try:
+        p = subprocess.run(
+            ["/usr/sbin/qm", "guest", "exec", VMID, "--timeout", "20", "--",
+             "/bin/sh", "-c", GUEST_SH],
+            capture_output=True, text=True, timeout=TIMEOUT)
+    except Exception:
+        fail(R_EXEC)
+    if p.returncode != 0:
+        fail(R_EXEC)
+    try:
+        payload = json.loads(p.stdout)
+    except Exception:
+        fail(R_PARSE)
+    if payload.get("exitcode") not in (0, None):
+        fail(R_AGENT)
+    text = payload.get("out-data") or ""
+    if not text.strip():
+        fail(R_EMPTY)
+
+    groups, rule_gws, netif = {}, set(), None
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) == 3 and f[0] == "GRP" and SAFE.match(f[1]):
+            try:
+                groups[f[1]] = int(f[2])
+            except ValueError:
+                pass
+        elif len(f) == 2 and f[0] == "RULEGW" and SAFE.match(f[1]):
+            rule_gws.add(f[1])
+        elif len(f) == 2 and f[0] == "PF" and SAFE.match(f[1]):
+            netif = f[1]
+
+    # A group is only failover if it has a standby tier AND an enabled rule sends traffic through it.
+    armed = sorted(n for n, tiers in groups.items() if tiers >= 2 and n in rule_gws)
+
+    out = {"source_ok": "true", "armed": "true" if armed else "false",
+           "groups_total": len(groups)}
+    if armed:
+        out["group"] = armed[0]
+        out["tiers"] = groups[armed[0]]
+    if netif:
+        out["active_netif"] = netif
+        out["active_path"] = NETIF_PATH.get(netif, "unknown")
+    else:
+        # pf had no policy route-to for local nets. Unproven, so it is reported as unknown
+        # rather than defaulted to the primary.
+        out["active_path"] = "unknown"
+    emit(**out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
