@@ -48,6 +48,17 @@ def test_smart_real_failure():
     assert mon.classify("smart", 0, "SMART overall-health self-assessment test result: FAILED") == "WARN"
 
 
+def test_journal_check_is_time_bounded_not_boot_scoped():
+    # 2026-09-25 dashboard reconciliation: JOURNAL used "-b -n 25" (last 25 err lines since BOOT),
+    # so one non-recurring event (a single stale auth failure on Randy) sat in that window and
+    # re-reported as freshly active on every 15-minute run for 22h+, until 25 newer err lines or a
+    # reboot pushed it out. The check must instead be bounded by TIME, comfortably larger than the
+    # monitor's own cadence, so a one-off ages out within roughly one cycle.
+    assert "--since" in mon.JOURNAL, "journal_errors must be time-windowed, not boot+count-scoped"
+    assert re.search(r"-n\s+\d+", mon.JOURNAL) is None, (
+        "a fixed line-count cap reintroduces the same staleness bug on any node with >N err lines")
+
+
 def test_page_auth_401_ok_200_public():
     assert mon.classify("page_auth", 0, "HTTP 401") == "OK"
     assert mon.classify("page_auth", 0, "HTTP 200") == "WARN"

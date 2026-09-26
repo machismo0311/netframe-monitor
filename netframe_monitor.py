@@ -60,7 +60,14 @@ _REASON_MAX = 32
 # are matched by /etc/sudoers.d/monitor on each node.
 # ---------------------------------------------------------------------------
 DF = "/usr/bin/df -h -x tmpfs -x devtmpfs -x overlay -x squashfs"
-JOURNAL = "sudo -n /usr/bin/journalctl -p err -b --no-pager -n 25"
+JOURNAL = "sudo -n /usr/bin/journalctl -p err -b --since '-20min' --no-pager"
+# TIME-bounded, not count-bounded: "-b -n 25" let a single non-recurring event (e.g. one
+# auth failure) sit in the last-25-since-boot window and re-report as freshly active on
+# every run until 25 newer err lines or a reboot pushed it out (measured: 22h+ on Randy,
+# 2026-09-25 dashboard reconciliation). 20min gives headroom over the monitor's own 15min
+# cadence (netframe-monitor.timer OnUnitActiveSec) so a one-off ages out within one cycle.
+# Sudoers on every node matches this EXACT argv (see /etc/sudoers.d/monitor) - changing it
+# here requires updating all seven sudoers files in the same change.
 # -H (health verdict) + -A (attributes) so we can trend pending/realloc/temp.
 SMART = (
     "for d in $(lsblk -dno NAME,TYPE | awk '$2==\"disk\"{print $1}'); do "
