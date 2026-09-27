@@ -46,6 +46,15 @@ iptables -I INPUT 1 -p tcp --dport "$port" -s 127.0.0.1 -j ACCEPT
 # A fake iptables that models the two behaviours under test: canonical global-option parsing
 # (so "-w 10 -C ..." is understood as a -C, not as an unknown verb), and real lock contention via
 # flock on a temp file. Without -w it fails immediately exactly as iptables 1.8.11 does.
+# Tailscale's own chain, verbatim in shape from Jarvis. The scripts must never modify it.
+TS_INPUT = [
+    "-s 100.64.0.6/32 -i lo -j ACCEPT",
+    "-i tailscale0 -j ACCEPT",
+    "-p udp -m udp --dport 41641 -j ACCEPT",
+    "-s 100.115.92.0/23 ! -i tailscale0 -j RETURN",
+    "-s 100.64.0.0/10 ! -i tailscale0 -j DROP",
+]
+
 FAKE_IPTABLES = r'''#!/usr/bin/env python3
 import fcntl, json, os, sys, time
 
@@ -53,13 +62,24 @@ args = sys.argv[1:]
 state = os.environ["NFM_FAKE_STATE"]
 lockfile = os.environ["NFM_FAKE_LOCK"]
 fail_insert = int(os.environ.get("NFM_FAKE_FAIL_INSERT", "0"))
+# Deny one -C probe by ordinal, per table, WITHOUT touching the lock, so probe classification can
+# be tested in isolation from insert failures. Scoped per table because this script probes the raw
+# table inside its fast path.
+fail_check = int(os.environ.get("NFM_FAKE_FAIL_CHECK", "0"))
+fail_check_raw = int(os.environ.get("NFM_FAKE_FAIL_CHECK_RAW", "0"))
+never_delete = os.environ.get("NFM_FAKE_NEVER_DELETE", "")
 calls_file = os.environ.get("NFM_FAKE_CALLS", "")
 
 # --- canonical leading global options come BEFORE the operation ---
 wait = None
+table = "filter"
 i = 0
 while i < len(args):
-    if args[i] in ("-w", "--wait"):
+    if args[i] == "-t":
+        i += 1
+        if i < len(args):
+            table = args[i]; i += 1
+    elif args[i] in ("-w", "--wait"):
         i += 1
         if i < len(args) and args[i].lstrip("-").isdigit():
             wait = int(args[i]); i += 1
@@ -75,7 +95,7 @@ args = args[i:]
 
 if calls_file:
     with open(calls_file, "a") as fh:
-        fh.write(("wait=%s " % wait) + " ".join(args) + "\n")
+        fh.write(("wait=%s table=%s " % (wait, table)) + " ".join(args) + "\n")
 
 # --- lock acquisition, mirroring iptables 1.8.11 semantics ---
 fh = open(lockfile, "w")
@@ -158,29 +178,55 @@ st = load()
 rc = 0
 op = args[0] if args else ""
 chain = args[1] if len(args) > 1 else ""
+# The raw table is a separate namespace. filter stays at st["chains"] so every pre-existing
+# assertion keeps working unchanged.
+if table == "filter":
+    chains = st["chains"]
+else:
+    chains = st.setdefault("tables", {}).setdefault(table, {})
 
-if op in ("-C", "-D") and chain in st["chains"]:
+if op == "-C" and ((table == "filter" and fail_check) or (table == "raw" and fail_check_raw)):
+    key = "checks" if table == "filter" else "checks_raw"
+    want = fail_check if table == "filter" else fail_check_raw
+    st[key] = st.get(key, 0) + 1
+    if st[key] == want:
+        save(st)
+        sys.stderr.write("Can\'t lock %s: Resource temporarily unavailable\n" % lockfile)
+        sys.stderr.write("Another app is currently holding the xtables lock. "
+                         "Perhaps you want to use the -w option?\n")
+        sys.exit(4)
+
+if op in ("-C", "-D") and chain in chains:
     spec = canon(args[2:])
-    rules = st["chains"][chain]
+    rules = chains[chain]
     idx = next((k for k, r in enumerate(rules) if r == spec), None)
     if idx is None:
         rc = 1
     elif op == "-D":
-        rules.pop(idx)
-elif op == "-I" and chain in st["chains"]:
+        # NFM_FAKE_NEVER_DELETE models a delete that reports success without removing anything,
+        # which is what spun the removal loop before it was bounded.
+        if not never_delete:
+            rules.pop(idx)
+elif op == "-I" and chain in chains:
     st["inserts"] = st.get("inserts", 0) + 1
     if fail_insert and st["inserts"] == fail_insert:
         sys.stderr.write("iptables: simulated insert failure\n")
         rc = 1
     else:
         pos = int(args[2]) - 1
-        st["chains"][chain].insert(pos, canon(args[3:]))
-elif op == "-S" and chain in st["chains"]:
+        chains[chain].insert(pos, canon(args[3:]))
+elif op == "-S" and chain in chains:
     print("-P %s ACCEPT" % chain)
-    for r in st["chains"][chain]:
+    for r in chains[chain]:
         print("-A %s %s" % (chain, r))
-elif op == "-L" and chain in st["chains"]:
+elif op == "-L" and chain in chains:
     pass
+elif op in ("-C", "-D", "-I", "-S", "-L"):
+    # A real iptables says so and exits nonzero. Returning 0 here used to make a missing chain
+    # look like "rule present AND delete succeeded", which spun the removal loop until the
+    # aggregate deadline. Harness fidelity matters: model the system, not the caller.
+    sys.stderr.write("iptables: No chain/target/match by that name.\n")
+    rc = 1
 else:
     st.setdefault("violations", []).append(args)
 save(st)
@@ -197,7 +243,7 @@ def chk(label, ok, detail=""):
 class Bed:
     """A test bed: fake iptables on PATH, a temp state file, a temp lock file."""
 
-    def __init__(self, tmp, chain_rules=None):
+    def __init__(self, tmp, chain_rules=None, raw_rules=None):
         self.tmp = tmp
         self.state = os.path.join(tmp, "state.json")
         self.lock = os.path.join(tmp, "xtables.lock.test")
@@ -209,7 +255,10 @@ class Bed:
             f.write(FAKE_IPTABLES)
         os.chmod(fake, 0o755)
         self.fake = fake
-        self.save({"chains": {"INPUT": list(chain_rules or [])}, "inserts": 0, "violations": []})
+        # ts-input models the Tailscale-owned chain: tests assert this script never touches it.
+        self.save({"chains": {"INPUT": list(chain_rules or []), "ts-input": list(TS_INPUT)},
+                   "tables": {"raw": {"PREROUTING": list(raw_rules or [])}},
+                   "inserts": 0, "violations": []})
 
     def save(self, st):
         with open(self.state, "w") as f:
@@ -218,6 +267,12 @@ class Bed:
     def load(self):
         with open(self.state) as f:
             return json.load(f)
+
+    def raw(self):
+        return self.load().get("tables", {}).get("raw", {}).get("PREROUTING", [])
+
+    def tsinput(self):
+        return self.load()["chains"].get("ts-input", [])
 
     def env(self, **extra):
         e = dict(os.environ)
@@ -394,11 +449,130 @@ print("=== broader exposure is rejected, not tolerated ===")
 with tempfile.TemporaryDirectory() as tmp:
     # A fourth, broader rule on the same port must make the invariant fail rather than pass.
     extra = "-p tcp -m tcp --dport %s -j ACCEPT" % PORT
+    # Seed through Bed so the raw table and ts-input are present. A manual save() here used to
+    # drop both, which modelled the caller instead of the system.
     bed = Bed(tmp, chain_rules=WANT + [extra])
-    bed.save({"chains": {"INPUT": WANT + [extra]}, "inserts": 0, "violations": []})
     rc, out, _ = bed.run_new()
     chk("an extra ACCEPT on the port is detected as broader exposure",
         rc != 0 and "no broader exposure" in out, "rc=%d out=%r" % (rc, out[:300]))
+
+print()
+print("=== T   the tailnet denial: placement, idempotency, repair, partial failure ===")
+TS_TAG = "NFM-%s-TAILNET-DENY" % PORT
+FOREIGN_RAW = "-p tcp -m tcp --dport 9999 -i tailscale0 -m comment --comment SOMEONE-ELSE -j DROP"
+
+
+def ts_rules(bed):
+    return [r for r in bed.raw() if TS_TAG in r]
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    bed = Bed(tmp, raw_rules=[FOREIGN_RAW])
+    rc, out, _ = bed.run_new()
+    raw = bed.raw()
+    mine = ts_rules(bed)
+    chk("T exit 0", rc == 0, "rc=%d out=%r" % (rc, out[:200]))
+    chk("T exactly one tailnet denial exists", len(mine) == 1, repr(raw))
+    chk("T it denies tcp/%s arriving on tailscale0, and DROPs" % PORT,
+        len(mine) == 1 and "-i tailscale0" in mine[0] and "--dport %s " % PORT in mine[0] + " "
+        and mine[0].endswith("-j DROP"), repr(mine))
+    # Placement is STRUCTURAL, not positional: the raw table is traversed before the filter table,
+    # so this rule is always evaluated before ts-input's terminal ACCEPT. There is no ordering
+    # contest to assert, which is precisely why this table was chosen.
+    chk("T the denial lives in the raw table, which precedes filter (so ts-input cannot pre-empt it)",
+        all(TS_TAG not in r for r in bed.load()["chains"]["INPUT"]) and len(mine) == 1,
+        repr(bed.load()["chains"]["INPUT"]))
+    chk("T an unrelated tailnet rule for another port is untouched", FOREIGN_RAW in raw, repr(raw))
+    chk("T Tailscale's own chain is byte-identical, never edited", bed.tsinput() == TS_INPUT,
+        repr(bed.tsinput()))
+    chk("T localhost remains allowed in filter", WANT[0] in bed.load()["chains"]["INPUT"], repr(WANT[0]))
+    chk("T NPM remains allowed in filter", WANT[1] in bed.load()["chains"]["INPUT"], repr(WANT[1]))
+    chk("T the filter policy is still exactly the three required rules",
+        bed.load()["chains"]["INPUT"][:3] == WANT, repr(bed.load()["chains"]["INPUT"]))
+    chk("T the raw calls carried the bounded wait too",
+        all("wait=10" in ln for ln in open(bed.calls).read().splitlines() if "table=raw" in ln),
+        "".join(ln for ln in open(bed.calls).read().splitlines(True) if "table=raw" in ln)[:200])
+
+    # idempotency
+    rc2, out2, _ = bed.run_new()
+    chk("T a second run is a no-op and says so", rc2 == 0 and "already correct" in out2, out2[:160])
+    chk("T no duplicate denial was created", len(ts_rules(bed)) == 1, repr(bed.raw()))
+
+with tempfile.TemporaryDirectory() as tmp:
+    # missing-rule repair: an outside actor deletes the denial
+    bed = Bed(tmp)
+    bed.run_new()
+    st = bed.load()
+    st["tables"]["raw"]["PREROUTING"] = [r for r in st["tables"]["raw"]["PREROUTING"] if TS_TAG not in r]
+    bed.save(st)
+    rc, out, _ = bed.run_new()
+    chk("T a deleted denial is detected and repaired", rc == 0 and len(ts_rules(bed)) == 1,
+        "rc=%d raw=%r" % (rc, bed.raw()))
+
+with tempfile.TemporaryDirectory() as tmp:
+    # a duplicate the script did not create must be normalised back to exactly one
+    bed = Bed(tmp)
+    bed.run_new()
+    st = bed.load()
+    dup = [r for r in st["tables"]["raw"]["PREROUTING"] if TS_TAG in r][0]
+    st["tables"]["raw"]["PREROUTING"].append(dup)
+    bed.save(st)
+    rc, out, _ = bed.run_new()
+    chk("T a duplicated denial is normalised back to exactly one", rc == 0 and len(ts_rules(bed)) == 1,
+        "rc=%d raw=%r" % (rc, bed.raw()))
+
+with tempfile.TemporaryDirectory() as tmp:
+    # partial application: the raw insert is denied the lock
+    bed = Bed(tmp)
+    # From a clean chain the inserts are drop, npm, local (filter) then the raw denial: ordinal 4.
+    rc, out, _ = bed.run_new(NFM_FAKE_FAIL_INSERT=4)
+    chk("T a denied raw insert exits nonzero rather than reporting success", rc != 0,
+        "rc=%d out=%r" % (rc, out[:220]))
+    chk("T and the invariant names the missing denial",
+        "TAILNET-DENY" in out or "tailnet DROP" in out, out[:300])
+
+with tempfile.TemporaryDirectory() as tmp:
+    # A denied raw PROBE must not be read as absence. This needs a state the fast path rejects,
+    # otherwise the run exits on the fast path after a single raw probe and ordinal 2 never occurs.
+    # Seed a duplicate: the fast path declines (probe 1), then ts_remove_all probes (probe 2),
+    # and that is the one denied.
+    bed = Bed(tmp)
+    bed.run_new()
+    st = bed.load()
+    dup = [r for r in st["tables"]["raw"]["PREROUTING"] if TS_TAG in r][0]
+    st["tables"]["raw"]["PREROUTING"].append(dup)
+    bed.save(st)
+    before = len(ts_rules(bed))
+    rc, out, _ = bed.run_new(NFM_FAKE_FAIL_CHECK_RAW=2)
+    # It could not probe that copy, so it could not remove it, and it deliberately still completes
+    # the insert. For a DROP that is the fail-SAFE direction: an extra copy still denies, whereas
+    # skipping the insert could leave none. So the end state is denied-but-duplicated, reported as
+    # a failure, and normalised by a re-run. Same reasoning as the filter path above.
+    chk("T a denied raw probe fails loudly rather than reporting success",
+        rc != 0, "rc=%d out=%r" % (rc, out[:200]))
+    chk("T and the denial is still in force (fail-safe direction)",
+        len(ts_rules(bed)) >= 1, repr(bed.raw()))
+    chk("T and says it is not treating the raw denial as absence",
+        "raw probe failed" in out or "not treating as absent" in out, out[:260])
+    rc_fix, _, _ = bed.run_new()
+    chk("T and a re-run normalises it back to exactly one denial",
+        rc_fix == 0 and len(ts_rules(bed)) == 1, "rc=%d raw=%r" % (rc_fix, bed.raw()))
+
+with tempfile.TemporaryDirectory() as tmp:
+    # The bounded removal loop only engages when a removal is actually required, so seed a
+    # duplicate first. With deletes that report success but remove nothing, the loop must give up
+    # after MAX_PASSES rather than spin until the aggregate deadline.
+    bed = Bed(tmp)
+    bed.run_new()
+    st = bed.load()
+    dup = [r for r in st["tables"]["raw"]["PREROUTING"] if TS_TAG in r][0]
+    st["tables"]["raw"]["PREROUTING"].append(dup)
+    bed.save(st)
+    rc, out, elapsed = bed.run_new(NFM_MAX_PASSES=3, NFM_FAKE_NEVER_DELETE=1)
+    chk("T a delete that reports success without removing is bounded, not a spin",
+        elapsed < 20.0, "%.1fs" % elapsed)
+    chk("T and it is reported as a refusal to spin",
+        "refusing to spin" in out or rc != 0, "rc=%d out=%r" % (rc, out[:220]))
 
 print()
 if FAILURES:
