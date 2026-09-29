@@ -566,7 +566,6 @@ def test_tailnet_denial_denied_probe_not_read_as_absent():
         dup = [r for r in st["tables"]["raw"]["PREROUTING"] if TS_TAG in r][0]
         st["tables"]["raw"]["PREROUTING"].append(dup)
         bed.save(st)
-        before = len(ts_rules(bed))
         rc, out, _ = bed.run_new(NFM_FAKE_FAIL_CHECK_RAW=2)
         # It could not probe that copy, so it could not remove it, and it deliberately still completes
         # the insert. For a DROP that is the fail-SAFE direction: an extra copy still denies, whereas
