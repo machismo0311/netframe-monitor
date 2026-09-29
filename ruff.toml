@@ -26,7 +26,5 @@
 # .github/workflows/ci.yml and give the py_compile and pytest steps
 # `if: always()`, so a future lint failure cannot hide the tests again.
 
-target-version = "py312"
-
 [lint]
 select = ["E4", "E7", "E9", "F"]
