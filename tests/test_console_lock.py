@@ -676,5 +676,13 @@ if __name__ == "__main__":
         except AssertionError as exc:
             failed += 1
             print("  FAIL  %s: %s" % (name, exc))
+        except Exception as exc:
+            # A test can fail by raising something that is not an AssertionError. Catching
+            # only AssertionError let that escape and abort this standalone runner, losing
+            # every result after it. Ordinary exceptions are recorded and reporting
+            # continues, with the type and message printed rather than swallowed.
+            # `Exception` deliberately does not catch KeyboardInterrupt or SystemExit.
+            failed += 1
+            print("  FAIL  %s: %s: %s" % (name, type(exc).__name__, exc))
     print("%d/%d passed" % (len(fns) - failed, len(fns)))
     sys.exit(1 if failed else 0)
