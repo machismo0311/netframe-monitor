@@ -16,12 +16,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install ruff pytest
+      # ruff is pinned because an unpinned install let a ruff release redefine
+      # the enforced rule set and hold CI red from 2026-08-04 with no code
+      # change. 0.16.9 is the version the first green run was produced with.
+      # Home-Lab pins its linter the same way (ruff==0.15.21). pytest is left
+      # unpinned deliberately: no repo in this fleet pins a test runner, and a
+      # test runner that drifts fails loudly rather than silently changing
+      # what is enforced. Keep this in step with ruff.toml.
+      - run: pip install ruff==0.16.9 pytest
       - name: Ruff (full check)
         run: ruff check .
+      # `if: always()` on the two steps below. Until now a lint failure aborted
+      # the job before either could run, which is why the suite stopped
+      # executing for roughly two months without anyone seeing a test result.
+      # The job still fails when any step fails; it just stops hiding results.
       - name: Syntax check (py_compile)
+        if: always()
         run: find . -name '*.py' -not -path './.git/*' -print0 | xargs -0 python -m py_compile
       - name: Unit tests (deterministic; the LLM scenario eval runs on Jarvis)
+        if: always()
         run: pytest tests/ -q
 
   shellcheck:
