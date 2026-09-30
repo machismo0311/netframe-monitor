@@ -948,9 +948,19 @@ if __name__ == "__main__":
     # `python3 tests/test_units.py` only saw the test functions defined above it: it ran
     # 26 of 81 and printed "26/26 passed", a false green that hid 55 tests. pytest was
     # never affected, because it imports the whole module before collecting.
+    import inspect
+
     fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
+    failed = skipped = 0
     for name, fn in fns:
+        # Some tests take pytest fixtures (tmp_path, monkeypatch). Nothing supplies those
+        # outside pytest, so standalone they are SKIPPED and said so, rather than counted
+        # as failures. Silently reporting them as failed would be its own false signal.
+        needs = list(inspect.signature(fn).parameters)
+        if needs:
+            skipped += 1
+            print(f"skip {name}  (needs pytest fixtures: {', '.join(needs)})")
+            continue
         try:
             fn()
             print(f"ok   {name}")
@@ -964,5 +974,6 @@ if __name__ == "__main__":
             # SystemExit, which still propagate.
             failed += 1
             print(f"FAIL {name}: {type(e).__name__}: {e}")
-    print(f"\n{len(fns) - failed}/{len(fns)} passed")
+    ran = len(fns) - skipped
+    print(f"\n{ran - failed}/{ran} passed, {skipped} skipped (pytest-fixture tests), {len(fns)} collected")
     raise SystemExit(1 if failed else 0)

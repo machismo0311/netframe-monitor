@@ -161,10 +161,20 @@ def test_parser_never_emits_freeform_text():
 
 
 if __name__ == "__main__":
+    import inspect
     import sys
+
     fails = []
+    skipped = 0
     for n, f in sorted(globals().items()):
         if n.startswith("test_") and callable(f):
+            # Same convention as tests/test_units.py: a test taking pytest fixtures cannot
+            # run outside pytest, so it is skipped and said so rather than failed.
+            needs = list(inspect.signature(f).parameters)
+            if needs:
+                skipped += 1
+                print("skip ", n, "(needs pytest fixtures: %s)" % ", ".join(needs))
+                continue
             try:
                 f()
                 print("PASS ", n)
@@ -172,11 +182,12 @@ if __name__ == "__main__":
                 print("FAIL ", n, e)
                 fails.append(n)
             except Exception as e:
-                # Reported, not swallowed: a non-assertion failure must not abort the
-                # rest. `Exception` deliberately does not catch KeyboardInterrupt or
-                # SystemExit, which still propagate.
+                # Reported, not swallowed. `Exception` deliberately does not catch
+                # KeyboardInterrupt or SystemExit, which still propagate.
                 print("FAIL ", n, f"{type(e).__name__}: {e}")
                 fails.append(n)
     print("----")
+    if skipped:
+        print("%d skipped (pytest-fixture tests)" % skipped)
     print("WAN POSTURE PRODUCER: " + ("FAIL " + str(fails) if fails else "PASS"))
     sys.exit(1 if fails else 0)
