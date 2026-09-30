@@ -232,20 +232,6 @@ def test_parse_df_max_use():
     assert mon.parse_df(out)["max_use_pct"] == 88
 
 
-if __name__ == "__main__":
-    fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in fns:
-        try:
-            fn()
-            print(f"ok   {name}")
-        except AssertionError as e:
-            failed += 1
-            print(f"FAIL {name}: {e}")
-    print(f"\n{len(fns) - failed}/{len(fns)} passed")
-    raise SystemExit(1 if failed else 0)
-
-
 def _admission():
     import importlib.util
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -540,7 +526,6 @@ def test_eval_scenario_prohibited_substrings_are_all_covered_by_a_rule():
             assert sub in samples, f"no sample for {sub!r} in {os.path.basename(path)}"
             r = pol.screen(samples[sub], evidence=ev, audit=False)
             assert not r["clean"], f"{sub!r} not covered by any POL rule"
-
 
 
 # ---- policy fixtures: the same boundary, asserted deterministically ----
@@ -956,3 +941,28 @@ def test_ups_monitoring_lost_is_warn_not_ok():
     assert mon.classify("ups", 0, "") == "WARN"
     one = "== tripplite ==\nbattery.charge: 100\nups.status: OL"
     assert mon.classify("ups", 0, one) == "WARN"
+
+
+if __name__ == "__main__":
+    # At END OF FILE deliberately. This guard used to sit mid-module, so a standalone
+    # `python3 tests/test_units.py` only saw the test functions defined above it: it ran
+    # 26 of 81 and printed "26/26 passed", a false green that hid 55 tests. pytest was
+    # never affected, because it imports the whole module before collecting.
+    fns = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    failed = 0
+    for name, fn in fns:
+        try:
+            fn()
+            print(f"ok   {name}")
+        except AssertionError as e:
+            failed += 1
+            print(f"FAIL {name}: {e}")
+        except Exception as e:
+            # A test can fail by raising something other than AssertionError. Catching only
+            # AssertionError let that abort the runner and lose every later result. Reported,
+            # never swallowed. `Exception` deliberately does not catch KeyboardInterrupt or
+            # SystemExit, which still propagate.
+            failed += 1
+            print(f"FAIL {name}: {type(e).__name__}: {e}")
+    print(f"\n{len(fns) - failed}/{len(fns)} passed")
+    raise SystemExit(1 if failed else 0)

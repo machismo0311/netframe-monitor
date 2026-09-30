@@ -171,6 +171,12 @@ if __name__ == "__main__":
             except AssertionError as e:
                 print("FAIL ", n, e)
                 fails.append(n)
+            except Exception as e:
+                # Reported, not swallowed: a non-assertion failure must not abort the
+                # rest. `Exception` deliberately does not catch KeyboardInterrupt or
+                # SystemExit, which still propagate.
+                print("FAIL ", n, f"{type(e).__name__}: {e}")
+                fails.append(n)
     print("----")
     print("WAN POSTURE PRODUCER: " + ("FAIL " + str(fails) if fails else "PASS"))
     sys.exit(1 if fails else 0)
