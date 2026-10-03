@@ -1,0 +1,5 @@
+# NetFRAME Packet C: sudoers pin for the Wazuh health wrapper. SOURCE ONLY, not installed.
+# Target: azuh (Wazuh VM 104), /etc/sudoers.d/monitor-wazuh-health, root:root 0440.
+# Validate with `visudo -cf` before installing. The "" permits NO arguments.
+# The existing `wazuh-control status` pin can be retired once this check is live.
+monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-wazuh-health ""

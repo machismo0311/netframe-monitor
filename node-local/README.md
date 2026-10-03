@@ -48,3 +48,28 @@ no arguments permitted):
 
 Invoked by `netframe_remediate.py` action `restart-wazuh-indexer` after explicit
 human approval. Live-fire validated 2026-07-15 (indexer returned to active).
+
+## <siem-vm>-nfm-wazuh-health
+Deployed to `<siem-vm>:/usr/local/sbin/nfm-wazuh-health` (root:root 0755). **Not yet deployed.**
+Argument-free, root-owned wrapper that reports the SIEM's health as seven measured inputs:
+manager, indexer, dashboard, log shipper, agents, authentication-telemetry freshness and event
+drops. Feeds the `wazuh` and `wazuh_coverage` checks. Sudoers pin, source in
+`azuh-nfm-wazuh-health.sudoers` (note the `""` = no arguments permitted):
+
+    monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-wazuh-health ""
+
+**Why it exists.** The previous SIEM check read only the manager's daemon list. For eight days it
+showed the SIEM green while the search backend was down, the dashboard returned 503, the log
+shipper could not deliver, and most agents had silently stopped sending authentication telemetry.
+
+**Freshness uses authentication successes only.** A journal reader can stall on the system journal
+while still holding user journals, which keep feeding session and sudo alerts. Only an sshd
+"Accepted" line (rule 5715), which comes through the system journal, proves the reader is alive.
+On hosts the monitor visits, its own login is the canary.
+
+**Cluster health** is read with the indexer's local admin client certificate, in place, for one
+fixed GET whose response yields only the status word. A dedicated least-privilege credential is
+a deployment decision.
+
+Emits only a bounded key=value vocabulary and an `end=1` sentinel; any failure is a fixed token.
+Read-only: it starts nothing, stops nothing and changes no configuration.
