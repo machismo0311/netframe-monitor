@@ -189,15 +189,17 @@ def test_llm_router_probes_via_npm_not_localhost():
     assert "localhost" not in mon.LLM_ROUTER
 
 
-def test_wazuh_optional_daemon_down_is_ok():
+def test_wazuh_daemon_status_alone_is_never_ok():
+    """Packet C: `wazuh-control status` output is no longer health. All core daemons running used
+    to read "CORE OK" while the indexer was down; without the wrapper's report it is UNKNOWN."""
     out = ("wazuh-analysisd is running\nwazuh-remoted is running\nwazuh-db is running\n"
            "wazuh-modulesd is running\nwazuh-syscheckd is running\nwazuh-maild not running")
-    assert mon.classify("wazuh", 1, out) == "OK"  # optional maild down, rc nonzero, still OK
+    assert mon.classify("wazuh", 1, out) == "UNKNOWN"
 
 
-def test_wazuh_core_daemon_down_is_warn():
-    out = "wazuh-analysisd not running\nwazuh-remoted is running\nwazuh-db is running"
-    assert mon.classify("wazuh", 1, out) == "WARN"
+def test_wazuh_auth_failure_still_wins():
+    out = "sudo: a password is required"
+    assert mon.classify("wazuh", 1, out) == "AUTH-FAIL"
 
 
 # ---- injection tripwire: overt imperatives caught, benign lines clean ----
@@ -733,7 +735,7 @@ def test_inventory_matches_source_for_this_repo():
         if mod in ("netframe_policy", "netframe_audit", "netframe_knowledge",
                    "netframe_monitor", "netframe_admission", "netframe_confdrift",
                    "netframe_memory", "netframe_eval", "netframe_backup",
-                   "netframe_evidence"):
+                   "netframe_evidence", "netframe_wazuh_health"):
             continue  # engine/collector/plumbing: no LLM prose to an operator
         assert mod in inv, f"{mod} is missing from the AI surface inventory"
         row = inv[mod]

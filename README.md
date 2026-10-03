@@ -75,6 +75,17 @@ Beyond host health, the collector tracks the observability stack in three tiers:
   choosing. DNS services are probed by their actual function, a real DNS answer, rather than by
   process liveness.
 
+**SIEM health is seven measured inputs, not one daemon list.** The SIEM check used to report the
+manager's daemon list, and its green answer stood for the whole SIEM while the search backend was
+down and most agents had silently stopped delivering authentication telemetry. It now reports
+manager, indexer, dashboard, log shipper, expected agents, authentication-telemetry freshness and
+event drops, from one argument-free wrapper inside the SIEM guest (`node-local/`), classified by
+`netframe_wazuh_health.py`. Two checks come out of one run: `wazuh` (is the SIEM working) and
+`wazuh_coverage` (can it see the estate). Each is NOMINAL, DEGRADED, CRITICAL or UNKNOWN, and
+UNKNOWN is never green. The expected agents are a tracked list (`wazuh-expected-agents.psv`), never
+whoever happens to be connected; and freshness is judged on authentication-success events only,
+because an agent can be connected while its journal reader is blind.
+
 ## Least privilege
 
 The `monitor` account is granted `NOPASSWD` sudo **only for exact commands**, never for blanket
@@ -85,7 +96,7 @@ virtualization verbs that could start, stop, or destroy guests:
 | Service host | `journalctl`, `smartctl`, scoped guest-list, fixed health wrapper |
 | GPU / compute host | `journalctl`, `smartctl`, `zpool`, scoped guest-list |
 | Storage host | `journalctl`, `smartctl`, `zpool`, backup manager |
-| SIEM guest | a single status command (disk usage runs unprivileged) |
+| SIEM guest | a single argument-free health wrapper (disk usage runs unprivileged) |
 | Remaining nodes | `journalctl`, `smartctl` |
 
 The pinning is deliberate. A bare `journalctl` grant is a pager shell-escape away from interactive
@@ -95,7 +106,7 @@ root, so each grant is pinned to the daemon's exact invocation rather than to th
 
 ```bash
 # from this directory, on a host with ssh access to the monitoring host
-scp *.py netframe-run.sh netframe-8808-lock.sh netframe-console-lock.sh \
+scp *.py wazuh-expected-agents.psv netframe-run.sh netframe-8808-lock.sh netframe-console-lock.sh \
     <monitor-host>:/opt/netframe-monitor/
 scp systemd/*.service systemd/*.timer systemd/*.path <monitor-host>:/etc/systemd/system/
 ssh <monitor-host> 'chmod +x /opt/netframe-monitor/*.sh && systemctl daemon-reload \
@@ -108,6 +119,13 @@ ssh <monitor-host> 'chmod +x /opt/netframe-monitor/*.sh && systemctl daemon-relo
 > timers that re-exec each run. This is handled automatically by a `.path` unit that watches the
 > console's source files and does a debounced restart on any change. (It will not resurrect a
 > console you deliberately stopped.)
+
+> **SIEM health ordering.** Install the SIEM guest's wrapper and its sudoers pin (`node-local/`)
+> *before* deploying a collector that calls it. In the other order the SIEM checks read AUTH-FAIL
+> until the wrapper exists. They never read green by accident. Update the wall (netframe-dashboard)
+> before this collector, too: an older wall paints its SIEM integrity chip from the `wazuh` check
+> alone, which now carries only the services tree, so it would still show green while auth telemetry
+> is stale. The current wall reads the old daemon-only check as UNKNOWN, so wall-first is safe.
 
 ## Not included (generated / secret)
 

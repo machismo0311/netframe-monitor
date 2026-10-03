@@ -28,6 +28,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# Sibling modules live next to this file both in the repository and in /opt/netframe-monitor.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import netframe_wazuh_health as WH  # noqa: E402
+
 BASE = "/opt/netframe-monitor"
 KEY = f"{BASE}/monitor_key"
 STATE_FILE = f"{BASE}/last_run.json"
@@ -147,13 +153,15 @@ NET_FLOW = ("/usr/bin/curl -fsS -m 6 -G " + _LOKI_Q + " --data-urlencode "
 PIHOLE = ("echo DNS:; dig +short +time=3 +tries=1 @192.168.10.177 example.com A; "
           "echo HTTP:; /usr/bin/curl -s -o /dev/null -w '%{http_code}' -m 5 "
           "http://192.168.10.177/admin/")
-# Wazuh manager (SIEM, VM 104 on QuarkyLab, its own IP .184) — monitor SSHes in like
-# any node; sudoers there is scoped to exactly `wazuh-control status`. Only the CORE
-# daemons matter: clusterd/maild/agentlessd/integratord/dbd/csyslogd are disabled by
-# default and legitimately show "not running", so we never alert on those.
-WAZUH = "sudo -n /var/ossec/bin/wazuh-control status"
-WAZUH_CORE = {"wazuh-analysisd", "wazuh-remoted", "wazuh-db",
-              "wazuh-modulesd", "wazuh-syscheckd"}
+# Wazuh SIEM (VM 104 on QuarkyLab, its own IP .184). Packet C: the old check ran only
+# `wazuh-control status` and its answer was shown as the health of the whole SIEM, which read
+# "CORE OK" in green for eight days with the indexer down and auth telemetry blind on 8 of 9 hosts.
+# The argument-free, root-owned wrapper (node-local/azuh-nfm-wazuh-health) reports seven measured
+# inputs; netframe_wazuh_health classifies them. The tracked expected-agents list sits next to this
+# file. ONE ssh call feeds two checks: `wazuh` (services: manager, indexer, dashboard, Filebeat) and
+# the derived `wazuh_coverage` (integrity: agents, auth telemetry, drops).
+WAZUH_HEALTH = "sudo -n /usr/local/sbin/nfm-wazuh-health"
+WAZUH_EXPECTED_AGENTS = os.path.join(_HERE, "wazuh-expected-agents.psv")
 # Self-guard: the report page must stay behind NPM Basic auth. An un-credentialed
 # request should get 401; a 200 means the NPM access list got detached (the page is
 # publicly readable) — WARN so we notice instead of it silently regressing.
@@ -214,8 +222,14 @@ WAN_POSTURE = "sudo -n /usr/local/sbin/nfm-wan-posture"
 # never make the estate look unhealthy, so a skip cannot raise the overall verdict. It is
 # surfaced separately as "NOT TESTED" rather than folded in, so it also cannot be mistaken
 # for a passing test. Module-level so the ordering is testable rather than buried in main().
-VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "AUTH-FAIL": 2, "TIMEOUT": 2,
-                "UNREACHABLE": 2}
+#
+# CRIT and UNKNOWN came with Packet C (the Wazuh health checks). UNKNOWN ranks with WARN, above OK,
+# so an unmeasured check can never make the estate read healthy; CRIT ranks with the hard failures.
+# A verdict missing from this table ranks as a hard failure too (see VERDICT_RANK_DEFAULT): a new
+# verdict must never crash the sweep with a KeyError, and must never be read as OK.
+VERDICT_RANK = {"OK": 0, "SKIPPED": 0, "WARN": 1, "UNKNOWN": 1, "CRIT": 2, "AUTH-FAIL": 2,
+                "TIMEOUT": 2, "UNREACHABLE": 2}
+VERDICT_RANK_DEFAULT = 2
 
 NODES = {
     "jarvis":    {"ip": None,             "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "gpu": GPU, "llm_router_conformance": LLM_ROUTER_CONFORMANCE}},
@@ -229,8 +243,9 @@ NODES = {
     "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "npm_dns": NPM_DNS}},
     "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS}},
     "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
-    # Wazuh SIEM VM (.184) — manager daemon health (scoped sudo) + unprivileged df.
-    "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH, "df": DF}},
+    # Wazuh SIEM VM (.184): seven-input health via the argument-free wrapper (scoped sudo), which
+    # also yields the derived wazuh_coverage check, plus unprivileged df.
+    "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH_HEALTH, "df": DF}},
     # Synthetic node: monitoring-service health probed locally from Jarvis (no SSH).
     "monitoring": {"ip": None,            "checks": {"grafana": GRAFANA, "loki": LOKI, "pihole": PIHOLE, "page_auth": AUTHGUARD, "console_auth": CONSOLE_AUTHGUARD, "llm_router": LLM_ROUTER, "console_backend": CONSOLE_BACKEND, "report_backend": REPORT_BACKEND, "openwebui_reach": OPENWEBUI_REACH, "console_transact": CONSOLE_TRANSACT, "net_config_change": NET_CFGCHG, "net_syslog_flow": NET_FLOW, "ups": UPS}},
 }
@@ -637,16 +652,56 @@ def parse_transact(out):
             "functionally_verified": (kv.get("result") == "PASS") if attempted else None}
 
 
+_WAZUH_CACHE = {}
+
+
+def wazuh_expected():
+    """The tracked expected-agents list, or None when it cannot be read (A and T then read UNKNOWN)."""
+    if "expected" not in _WAZUH_CACHE:
+        try:
+            _WAZUH_CACHE["expected"] = WH.load_expected(WAZUH_EXPECTED_AGENTS)
+        except (OSError, ValueError, KeyError):
+            _WAZUH_CACHE["expected"] = None
+    return _WAZUH_CACHE["expected"]
+
+
+def wazuh_prev():
+    """The previous run's Wazuh drop sample from history.jsonl, or None. Drops are judged on the
+    change since that run, because the daemons' counters are cumulative."""
+    if "prev" not in _WAZUH_CACHE:
+        prev = None
+        try:
+            with open(HISTORY_FILE) as fh:
+                lines = fh.readlines()
+            for line in reversed(lines[-5:]):
+                rec = json.loads(line)
+                prev = WH.prev_from_flat(rec.get("metrics"), "wazuh.wazuh")
+                if prev:
+                    break
+        except (OSError, ValueError):
+            prev = None
+        _WAZUH_CACHE["prev"] = prev
+    return _WAZUH_CACHE["prev"]
+
+
 def parse_wazuh(out):
-    status = {}
-    for line in out.splitlines():
-        m = re.match(r"\s*(wazuh-[\w-]+)\s+(is running|not running)", line)
-        if m:
-            status[m.group(1)] = (m.group(2) == "is running")
-    core_down = sorted(d for d in WAZUH_CORE if status.get(d) is not True)
-    return {"running": sum(1 for v in status.values() if v), "total": len(status),
-            "down": sorted(d for d, v in status.items() if not v),
-            "core_down": core_down, "up": not core_down}
+    """The full Packet C health result (seven inputs, both trees) for the `wazuh` check."""
+    return WH.evaluate(WH.parse_kv(out), wazuh_expected(), prev=wazuh_prev())
+
+
+def wazuh_coverage(wazuh_check):
+    """The integrity tree (agents, auth telemetry, drops) as its own check, derived from the SAME
+    wrapper run as `wazuh`. A run that never produced a health result reads UNKNOWN, never OK."""
+    m = (wazuh_check or {}).get("metrics") or {}
+    if "inputs" not in m:
+        res = WH.unmeasured()
+    else:
+        res = m
+    return {"verdict": WH.verdict(res["integrity"]), "rc": (wazuh_check or {}).get("rc"),
+            "metrics": {"tree": "integrity", "state": res["integrity"],
+                        "summary": res["integrity_summary"],
+                        "inputs": {k: res["inputs"][k] for k in WH.INTEGRITY}},
+            "raw_excerpt": ""}
 
 
 def parse_ups(out):
@@ -803,16 +858,9 @@ def classify(name, rc, out):
             return "SKIPPED"
         return "OK" if data["result"] == "PASS" else "WARN"
     if name == "wazuh":
-        # `wazuh-control status` exits non-zero if ANY daemon (incl. optional ones
-        # that are down by design) isn't running, so rc is not a health signal.
-        # Judge only by the CORE daemons; auth/ssh failures are caught above.
-        daemons = re.findall(r"(wazuh-[\w-]+)\s+(?:is running|not running)", out)
-        if not daemons:
-            return "WARN"  # no daemon status at all -> command didn't really run
-        for m in re.finditer(r"(wazuh-[\w-]+)\s+not running", out):
-            if m.group(1) in WAZUH_CORE:
-                return "WARN"
-        return "OK"
+        # The SERVICES tree: worst(manager, indexer, dashboard, Filebeat). The integrity tree is the
+        # derived `wazuh_coverage` check. A report that does not parse is UNKNOWN, never OK.
+        return WH.verdict(parse_wazuh(out)["services"])
     if name == "backup_verify":
         data = _backup_verify_load(out)
         if data is None:
@@ -867,7 +915,13 @@ def check_reason(name, metrics):
     if metrics.get("stale"):
         return REASON_STALE
     raw = ""
-    if name == "restore_verify":
+    if name == "wazuh" and "inputs" in metrics:
+        raw = WH.primary_reason(metrics, WH.SERVICES)
+    elif name == "wazuh_coverage" and "inputs" in metrics:
+        raw = WH.primary_reason({"inputs": {**{k: {"state": "NOMINAL", "reasons": []}
+                                                  for k in WH.SERVICES}, **metrics["inputs"]}},
+                                WH.INTEGRITY)
+    elif name == "restore_verify":
         raw = metrics.get("failure_class") or ""
     elif name == "hardening_drift":
         raw = "DRIFT" if metrics.get("any_drift") else ""
@@ -896,6 +950,9 @@ def render_metrics(report, now=None):
             lines.append(
                 f'netframe_monitor_check_status{{node="{host}",check="{name}",'
                 f'state="{state}",reason="{reason}"}} 1')
+    wz = ((report.get("nodes", {}).get("wazuh") or {}).get("wazuh") or {}).get("metrics") or {}
+    if "inputs" in wz:
+        lines += WH.prom_lines(wz, wazuh_expected() or [])
     lines += [
         "# HELP netframe_monitor_export_timestamp_seconds Unix time this export was written.",
         "# TYPE netframe_monitor_export_timestamp_seconds gauge",
@@ -991,7 +1048,8 @@ def flatten_metrics(nodes):
                     flat[f"{host}.{name}.verified"] = 1 if m["functionally_verified"] else 0
             if name == "wazuh":
                 flat[f"{host}.wazuh.up"] = 1 if m.get("up") else 0
-                flat[f"{host}.wazuh.running"] = m.get("running")
+                if "inputs" in m:
+                    flat.update(WH.flat(m, f"{host}.wazuh"))
             if name in ("page_auth", "console_auth"):
                 flat[f"{host}.{name}.enforced"] = 1 if m.get("auth_enforced") else 0
             if name == "backup_verify":
@@ -1023,11 +1081,26 @@ def append_history(record):
         print(f"WARN: could not write {HISTORY_FILE}: {exc}", file=sys.stderr)
 
 
+#: Verdicts that mean the check could not be COLLECTED. They, and only they, fail the run's exit
+#: status, so `systemctl status` keeps surfacing a broken collection path. CRIT shares their rank since
+#: Packet C, so the exit status can no longer be read off `worst`: a measured CRIT seen first would
+#: otherwise hide every later AUTH-FAIL.
+COLLECTION_FAILURES = ("AUTH-FAIL", "TIMEOUT", "UNREACHABLE")
+
+
+def _worse(verdict, than):
+    """True when `verdict` should replace `than` as the run's worst. On a tie in rank a collection
+    failure wins over a measured verdict, so the report's headline never hides a blind check."""
+    a = VERDICT_RANK.get(verdict, VERDICT_RANK_DEFAULT)
+    b = VERDICT_RANK.get(than, VERDICT_RANK_DEFAULT)
+    return a > b or (a == b and verdict in COLLECTION_FAILURES and than not in COLLECTION_FAILURES)
+
+
 def main():
     started = datetime.now(timezone.utc)
     report = {"started": started.isoformat(), "runner": socket.gethostname(), "nodes": {}}
     worst = "OK"
-    rank = VERDICT_RANK
+    collection_failed = False
 
     print(f"=== NetFRAME cluster health monitor — {started.isoformat()} ===")
     for host, cfg in NODES.items():
@@ -1038,7 +1111,8 @@ def main():
         for name, command in cfg["checks"].items():
             rc, out = run(ip, command)
             verdict = classify(name, rc, out)
-            if rank[verdict] > rank[worst]:
+            collection_failed = collection_failed or verdict in COLLECTION_FAILURES
+            if _worse(verdict, worst):
                 worst = verdict
             try:
                 metrics = PARSERS[name](out) if name in PARSERS else {}
@@ -1051,6 +1125,13 @@ def main():
                                  "raw_excerpt": excerpt[:RAW_EXCERPT]}
             print(f"\n--- [{verdict}] {host}:{name} (rc={rc}) ---")
             print(out if out else "<no output>")
+        if "wazuh" in node_result:
+            cov = wazuh_coverage(node_result["wazuh"])
+            node_result["wazuh_coverage"] = cov
+            if _worse(cov["verdict"], worst):
+                worst = cov["verdict"]
+            print(f"\n--- [{cov['verdict']}] {host}:wazuh_coverage (derived) ---")
+            print(cov["metrics"]["summary"])
         report["nodes"][host] = node_result
 
     report["worst"] = worst
@@ -1075,7 +1156,7 @@ def main():
     append_history({"ts": started.isoformat(), "worst": worst,
                     "verdicts": verdicts, "metrics": flatten_metrics(report["nodes"])})
 
-    return 1 if worst in ("AUTH-FAIL", "TIMEOUT", "UNREACHABLE") else 0
+    return 1 if collection_failed else 0
 
 
 if __name__ == "__main__":

@@ -1,0 +1,25 @@
+# NetFRAME Packet C: the agents the Wazuh manager is EXPECTED to have.
+#
+# This list is the authority, not the manager's registration list: an agent that is missing has to
+# be noticed, and an agent nobody expected has to be noticed too. Never generate it from whoever
+# happens to be connected. Change it by review when the estate changes.
+#
+# required  yes = its absence is a fault; no = shown as INFO only (a workstation that may be off).
+# auth      journald = its sshd authentication successes reach Wazuh through the journal and are
+#           checked for freshness; none = not checked.
+# canary    yes = the monitor logs in as `monitor` from Jarvis (192.168.10.31) every cycle, so a
+#           healthy system-journal reader always has a recent "Accepted publickey for monitor"
+#           alert (measured 192-769 per host per 24 h, largest gap about 15 min).
+#           no = no such login exists (pve1 is not a monitored node; Jarvis is checked locally).
+# auth_h    freshness threshold in hours: 2 with the canary, 24 without it.
+id|name|required|auth|canary|auth_h|notes
+000|azuh|yes|journald|yes|2|the manager itself (Active/Local)
+001|pve1|yes|journald|no|24|standalone Proxmox host, not a monitored node
+002|pve3|yes|journald|yes|2|
+003|Randy|yes|journald|yes|2|
+004|pve2|yes|journald|yes|2|
+005|QuarkyLab|yes|journald|yes|2|
+006|pve5|yes|journald|yes|2|
+007|pve4|yes|journald|yes|2|
+008|Jarvis|yes|journald|no|24|the collector runs locally on Jarvis, so no monitor login
+009|quixote|no|none|no|0|Windows workstation, may be off
