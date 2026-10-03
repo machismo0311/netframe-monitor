@@ -452,10 +452,12 @@ def summary(inputs, keys, state):
                     key=lambda k: (-SEVERITY[inputs[k]["state"]],
                                    inputs[k].get("dependent_on_indexer", False), keys.index(k)))
     words = []
-    for k in ranked[:2]:
-        reasons = [r for r in inputs[k]["reasons"] if r != "AGENT_OPTIONAL_OFFLINE"]
+    for k in ranked:
+        reasons = [r for r in inputs[k]["reasons"] if r != "AGENT_OPTIONAL_OFFLINE" and r not in words]
         if reasons:
             words.append(reasons[0])
+        if len(words) == 2:
+            break
     return f"{state} · {' · '.join(words)}" if words else state
 
 
