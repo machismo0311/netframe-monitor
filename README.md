@@ -122,7 +122,10 @@ ssh <monitor-host> 'chmod +x /opt/netframe-monitor/*.sh && systemctl daemon-relo
 
 > **SIEM health ordering.** Install the SIEM guest's wrapper and its sudoers pin (`node-local/`)
 > *before* deploying a collector that calls it. In the other order the SIEM checks read AUTH-FAIL
-> until the wrapper exists. They never read green by accident.
+> until the wrapper exists. They never read green by accident. Update the wall (netframe-dashboard)
+> before this collector, too: an older wall paints its SIEM integrity chip from the `wazuh` check
+> alone, which now carries only the services tree, so it would still show green while auth telemetry
+> is stale. The current wall reads the old daemon-only check as UNKNOWN, so wall-first is safe.
 
 ## Not included (generated / secret)
 
