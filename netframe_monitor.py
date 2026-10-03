@@ -1081,11 +1081,26 @@ def append_history(record):
         print(f"WARN: could not write {HISTORY_FILE}: {exc}", file=sys.stderr)
 
 
+#: Verdicts that mean the check could not be COLLECTED. They, and only they, fail the run's exit
+#: status, so `systemctl status` keeps surfacing a broken collection path. CRIT shares their rank since
+#: Packet C, so the exit status can no longer be read off `worst`: a measured CRIT seen first would
+#: otherwise hide every later AUTH-FAIL.
+COLLECTION_FAILURES = ("AUTH-FAIL", "TIMEOUT", "UNREACHABLE")
+
+
+def _worse(verdict, than):
+    """True when `verdict` should replace `than` as the run's worst. On a tie in rank a collection
+    failure wins over a measured verdict, so the report's headline never hides a blind check."""
+    a = VERDICT_RANK.get(verdict, VERDICT_RANK_DEFAULT)
+    b = VERDICT_RANK.get(than, VERDICT_RANK_DEFAULT)
+    return a > b or (a == b and verdict in COLLECTION_FAILURES and than not in COLLECTION_FAILURES)
+
+
 def main():
     started = datetime.now(timezone.utc)
     report = {"started": started.isoformat(), "runner": socket.gethostname(), "nodes": {}}
     worst = "OK"
-    rank = VERDICT_RANK
+    collection_failed = False
 
     print(f"=== NetFRAME cluster health monitor — {started.isoformat()} ===")
     for host, cfg in NODES.items():
@@ -1096,7 +1111,8 @@ def main():
         for name, command in cfg["checks"].items():
             rc, out = run(ip, command)
             verdict = classify(name, rc, out)
-            if rank.get(verdict, VERDICT_RANK_DEFAULT) > rank.get(worst, VERDICT_RANK_DEFAULT):
+            collection_failed = collection_failed or verdict in COLLECTION_FAILURES
+            if _worse(verdict, worst):
                 worst = verdict
             try:
                 metrics = PARSERS[name](out) if name in PARSERS else {}
@@ -1112,7 +1128,7 @@ def main():
         if "wazuh" in node_result:
             cov = wazuh_coverage(node_result["wazuh"])
             node_result["wazuh_coverage"] = cov
-            if rank.get(cov["verdict"], VERDICT_RANK_DEFAULT) > rank.get(worst, VERDICT_RANK_DEFAULT):
+            if _worse(cov["verdict"], worst):
                 worst = cov["verdict"]
             print(f"\n--- [{cov['verdict']}] {host}:wazuh_coverage (derived) ---")
             print(cov["metrics"]["summary"])
@@ -1140,7 +1156,7 @@ def main():
     append_history({"ts": started.isoformat(), "worst": worst,
                     "verdicts": verdicts, "metrics": flatten_metrics(report["nodes"])})
 
-    return 1 if worst in ("AUTH-FAIL", "TIMEOUT", "UNREACHABLE") else 0
+    return 1 if collection_failed else 0
 
 
 if __name__ == "__main__":

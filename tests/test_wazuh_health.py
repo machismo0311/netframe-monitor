@@ -558,6 +558,58 @@ def test_evidence_consumer_still_sees_core_down():
     assert "wazuh-remoted" in res["core_down"]
 
 
+def _drive_main(monkeypatch, tmp_path, node_outputs):
+    """Run the REAL main() over fake nodes. node_outputs: [(host, check, rc, out)] in NODES order."""
+    nodes, outs = {}, {}
+    for host, check, rc, out in node_outputs:
+        nodes.setdefault(host, {"ip": f"198.51.100.{len(nodes) + 1}", "checks": {}})["checks"][check] = check
+        outs[(nodes[host]["ip"], check)] = (rc, out)
+    history = []
+    monkeypatch.setattr(mon, "NODES", nodes)
+    monkeypatch.setattr(mon, "run", lambda ip, command: outs[(ip, command)])
+    monkeypatch.setattr(mon, "STATE_FILE", str(tmp_path / "last_run.json"))
+    monkeypatch.setattr(mon, "export_metrics", lambda report: None)
+    monkeypatch.setattr(mon, "append_history", history.append)
+    mon._WAZUH_CACHE.clear()
+    mon._WAZUH_CACHE.update({"expected": EXPECTED, "prev": None})
+    rc = mon.main()
+    return rc, json.load(open(tmp_path / "last_run.json")), history
+
+
+def _blind_majority():
+    kv = healthy(**{f"auth__{BY_NAME[n]}__{f}": 0 for n in ("pve2", "pve3", "pve4", "pve5", "Randy")
+                    for f in ("canary", "any")})
+    return "\n".join(f"{k}={v}" for k, v in kv.items())
+
+
+def test_a_measured_crit_never_hides_a_later_collection_failure(monkeypatch, tmp_path):
+    """Since Packet C, CRIT ranks with AUTH-FAIL. The run's exit status must still say a check could
+    not be collected, and the headline must name the blind check, whichever node comes first."""
+    rc, rep, hist = _drive_main(monkeypatch, tmp_path, [
+        ("wazuh", "wazuh", 0, _blind_majority()),
+        ("pve3", "df", 255, "monitor@198.51.100.2: Permission denied (publickey)."),
+    ])
+    assert rep["nodes"]["wazuh"]["wazuh_coverage"]["verdict"] == "CRIT"
+    assert rep["nodes"]["pve3"]["df"]["verdict"] == "AUTH-FAIL"
+    assert rc == 1, "a collection failure must fail the run even after a measured CRIT"
+    assert rep["worst"] == "AUTH-FAIL" and hist[0]["worst"] == "AUTH-FAIL"
+
+
+def test_a_measured_crit_alone_does_not_fail_the_run(monkeypatch, tmp_path):
+    """CRIT is a measured state of the estate, not a broken collector: the unit stays successful, and
+    the headline still says CRIT."""
+    rc, rep, _ = _drive_main(monkeypatch, tmp_path, [("wazuh", "wazuh", 0, _blind_majority())])
+    assert rc == 0 and rep["worst"] == "CRIT"
+
+
+def test_a_collection_failure_first_still_fails_the_run(monkeypatch, tmp_path):
+    rc, rep, _ = _drive_main(monkeypatch, tmp_path, [
+        ("pve3", "df", 255, "monitor@198.51.100.1: Permission denied (publickey)."),
+        ("wazuh", "wazuh", 0, _blind_majority()),
+    ])
+    assert rc == 1 and rep["worst"] == "AUTH-FAIL"
+
+
 # the wrapper, executed against a fake host ----------------------------------------------------
 WRAPPER = os.path.join(BASE, "node-local", "azuh-nfm-wazuh-health")
 LINE = re.compile(r"^[a-z0-9_.]+=[A-Za-z0-9_./:-]*$")
