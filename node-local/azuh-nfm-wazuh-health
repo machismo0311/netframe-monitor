@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+"""NetFRAME monitor: read-only Wazuh SIEM health facts from inside the Wazuh VM (azuh, VM 104).
+
+Accepts NO arguments. Emits only the bounded key=value vocabulary below and nothing else: no log
+line, no rule text, no alert body, no credential, no certificate material. It starts nothing,
+stops nothing, writes nothing and changes no configuration.
+
+WHY THIS EXISTS. The wall showed "Wazuh SIEM = CORE OK" in green from 2026-09-24 to 2026-10-02
+while the indexer was down, the dashboard returned 503, Filebeat could not ship, and 8 of 9 Linux
+agents had silently stopped delivering auth telemetry. The only input was `wazuh-control status`,
+which lists manager daemons and nothing else. Health is seven separate facts, and each is measured
+here, on the one host where all of them are local:
+
+    M  manager     unit, daemons, API liveness, age of the newest written alert
+    I  indexer     unit and start state (A3-aware), :9200, cluster health, last health transition
+    D  dashboard   unit and HTTP status
+    F  Filebeat    unit, recent output connect failures, registry lag against alerts.json
+    A  agents      agent_control list (the expected set is NOT decided here; the monitor owns it)
+    T  auth        newest sshd authentication-success alert (rule 5715) per agent, and newest
+                   MONITOR login (the canary), both read from the manager's own alert output
+    X  drops       analysisd and remoted counters and queue usage (cumulative; deltas are the
+                   monitor's job, because a single read cannot tell old drops from current ones)
+
+AUTH FRESHNESS USES RULE 5715 ONLY. An agent's journald reader can stall on the system journal
+while still holding user-*.journal files, which keep feeding sd-pam and sudo session alerts. That
+made a blind host look fresh from 2026-07-14 to 2026-08-08. sshd logs "Accepted publickey" from
+the privileged pre-session process, so a rule 5715 "Accepted" alert can only come through the
+system journal. pam_unix(cron:session) lines never count.
+
+CLUSTER HEALTH uses the indexer's local admin client certificate in place, for one fixed GET of
+`_cluster/health?filter_path=status`. Only the status word is read from the response. A
+least-privilege `cluster_monitor` credential would be better and is a deployment decision.
+
+Every external call has its own timeout; the whole run is bounded well inside the monitor's
+CHECK_TIMEOUT. Any failure becomes a fixed `err.<area>=<TOKEN>` line, never free text, and the
+final `end=1` line lets the reader detect truncated output.
+
+Deploy (NOT done by this commit): /usr/local/sbin/nfm-wazuh-health, root:root 0755, plus the
+sudoers pin in azuh-nfm-wazuh-health.sudoers.
+"""
+import gzip
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+SCHEMA = "netframe-wazuh-health/v1"
+
+OSSEC = "/var/ossec"
+ALERTS = f"{OSSEC}/logs/alerts/alerts.json"
+ALERTS_DIR = f"{OSSEC}/logs/alerts"
+ANALYSISD_STATE = f"{OSSEC}/var/run/wazuh-analysisd.state"
+REMOTED_STATE = f"{OSSEC}/var/run/wazuh-remoted.state"
+WAZUH_CONTROL = f"{OSSEC}/bin/wazuh-control"
+AGENT_CONTROL = f"{OSSEC}/bin/agent_control"
+CLUSTER_LOG = "/var/log/wazuh-indexer/wazuh-cluster.log"
+FILEBEAT_LOG = "/var/log/filebeat/filebeat"
+FILEBEAT_REGISTRY = "/var/lib/filebeat/registry/filebeat/log.json"
+INDEXER_CERT = "/etc/wazuh-indexer/certs/admin.pem"
+INDEXER_KEY = "/etc/wazuh-indexer/certs/admin-key.pem"
+
+SYSTEMCTL = "/usr/bin/systemctl"
+JOURNALCTL = "/usr/bin/journalctl"
+CURL = "/usr/bin/curl"
+
+#: The canary line. The monitor logs in as `monitor` from Jarvis (.31) every collection cycle, so on
+#: every host the monitor visits a healthy system-journal reader always has a recent one of these.
+CANARY = "Accepted publickey for monitor from 192.168.10.31"
+#: The alert line must say "Accepted" (an authentication success), never a session open/close.
+ACCEPTED = "Accepted "
+#: Cheap byte prefilter; the rule id is then confirmed from the parsed JSON, so neither JSON spacing
+#: nor a 5715 elsewhere in a line can make a line count or not count.
+RULE_5715 = b"5715"
+
+MAX_AGENTS = 64
+MAX_SCAN_BYTES = 200 * 1024 * 1024     # never scan an alert file larger than this
+TAIL_BYTES = 1024 * 1024               # how much of a log or registry tail to read
+FILEBEAT_WINDOW_S = 900                # "recent" connect failures: the monitor's cycle
+TIMEOUT = 15
+
+SAFE = re.compile(r"^[A-Za-z0-9_./:-]{0,64}$")
+AGENT_LINE = re.compile(r"ID:\s*(\d{3,5}),\s*Name:\s*([^,]+?),\s*IP:\s*[^,]*,\s*(.+?)\s*$")
+HEALTH_LINE = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d),\d+\].*Cluster health status changed "
+                         r"from \[([A-Z]+)\] to \[([A-Z]+)\]")
+TIMESPAN = re.compile(r"(\d+)\s*(h|min|s|ms|us)\b")
+
+OUT = []
+
+
+def emit(key, value):
+    """Append one key=value line. A value outside the safe alphabet is replaced, never echoed."""
+    value = str(value)
+    if not SAFE.match(value):
+        value = "INVALID"
+    OUT.append(f"{key}={value}")
+
+
+def err(area, token):
+    emit(f"err.{area}", token)
+
+
+def run(argv, timeout=TIMEOUT):
+    """(rc, stdout) of a fixed argv. stderr is discarded so no error text can leave the host."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                           env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
+        return p.returncode, p.stdout or ""
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    except OSError:
+        return 127, ""
+
+
+def tail(path, nbytes=TAIL_BYTES):
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        fh.seek(max(0, size - nbytes))
+        return fh.read().decode("utf-8", "replace")
+
+
+def uptime_s():
+    with open("/proc/uptime") as fh:
+        return float(fh.read().split()[0])
+
+
+def unit_props(unit, props):
+    rc, out = run([SYSTEMCTL, "show", unit] + [f"--property={p}" for p in props])
+    if rc != 0:
+        return None
+    return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def mono_to_epoch(mono_us, now, up):
+    """A systemd *Monotonic timestamp (microseconds since boot) as Unix time; 0 when unset."""
+    try:
+        mono = int(mono_us)
+    except (TypeError, ValueError):
+        return 0
+    if mono <= 0:
+        return 0
+    return int(now - (up - mono / 1e6))
+
+
+def timespan_s(text):
+    """Seconds in a systemd timespan string such as '7min', '1min 30s' or 'infinity'; -1 if unknown."""
+    if not text or text == "infinity":
+        return -1
+    total = 0.0
+    for n, unit in TIMESPAN.findall(text):
+        total += int(n) * {"h": 3600, "min": 60, "s": 1, "ms": 0.001, "us": 0.000001}[unit]
+    return int(total) if total else -1
+
+
+def http_code(url, extra=()):
+    rc, out = run([CURL, "-sk", "-o", "/dev/null", "-w", "%{http_code}", "-m", "8", *extra, url])
+    code = out.strip()
+    return code if re.fullmatch(r"\d{3}", code) else "000"
+
+
+def epoch_of(ts):
+    """Epoch of an alert timestamp such as 2026-10-03T21:21:31.497+0000."""
+    try:
+        return int(datetime.strptime(ts[:19] + ts[-5:], "%Y-%m-%dT%H:%M:%S%z").timestamp())
+    except (ValueError, TypeError):
+        return 0
+
+
+# --- M: manager ------------------------------------------------------------------------------
+def manager(now):
+    rc, out = run([SYSTEMCTL, "is-active", "wazuh-manager"])
+    emit("mgr.unit", out.strip() or "unknown")
+    rc, out = run([WAZUH_CONTROL, "status"], timeout=30)
+    seen = 0
+    for line in out.splitlines():
+        m = re.match(r"\s*wazuh-([a-z]+)\s+(is running|not running)", line)
+        if m and seen < 32:
+            emit(f"mgr.daemon.{m.group(1)}", "running" if m.group(2) == "is running" else "stopped")
+            seen += 1
+    if not seen:
+        err("mgr", "NO_DAEMON_STATUS")
+    emit("mgr.api_http", http_code("https://127.0.0.1:55000/"))
+    try:
+        st = os.stat(ALERTS)
+        emit("mgr.alerts_mtime", int(st.st_mtime))
+        emit("mgr.alerts_size", st.st_size)
+    except OSError:
+        err("mgr", "NO_ALERTS_FILE")
+
+
+# --- X: drops --------------------------------------------------------------------------------
+def state_file(path):
+    vals = {}
+    with open(path) as fh:
+        for line in fh:
+            m = re.match(r"^(\w+)='([0-9.]+)'", line.strip())
+            if m:
+                vals[m.group(1)] = m.group(2)
+    return vals
+
+
+def drops():
+    try:
+        a = state_file(ANALYSISD_STATE)
+        for key, name in (("events_received", "x.events_received"),
+                          ("events_dropped", "x.events_dropped")):
+            if key in a:
+                emit(name, int(float(a[key])))
+        usage = [float(v) for k, v in a.items() if k.endswith("_queue_usage")]
+        if usage:
+            emit("x.queue_max", f"{max(usage):.2f}")
+    except (OSError, ValueError):
+        err("x", "ANALYSISD_STATE_UNREADABLE")
+    try:
+        r = state_file(REMOTED_STATE)
+        if "discarded_count" in r:
+            emit("x.discarded", int(float(r["discarded_count"])))
+        if "evt_count" in r:
+            emit("x.evt_count", int(float(r["evt_count"])))
+        q, t = float(r.get("queue_size", 0)), float(r.get("total_queue_size", 0))
+        if t > 0:
+            emit("x.remoted_queue", f"{q / t:.2f}")
+    except (OSError, ValueError):
+        err("x", "REMOTED_STATE_UNREADABLE")
+
+
+# --- I: indexer ------------------------------------------------------------------------------
+def indexer(now, up):
+    props = unit_props("wazuh-indexer", [
+        "ActiveState", "SubState", "Result", "NRestarts", "TimeoutStartUSec",
+        "ExecMainStartTimestampMonotonic", "ActiveEnterTimestampMonotonic",
+        "StateChangeTimestampMonotonic"])
+    if props is None:
+        err("idx", "UNIT_UNREADABLE")
+        return
+    emit("idx.unit", props.get("ActiveState") or "unknown")
+    emit("idx.sub", props.get("SubState") or "unknown")
+    emit("idx.result", props.get("Result") or "unknown")
+    emit("idx.nrestarts", props.get("NRestarts") or "0")
+    emit("idx.timeout_start_s", timespan_s(props.get("TimeoutStartUSec")))
+    emit("idx.exec_start", mono_to_epoch(props.get("ExecMainStartTimestampMonotonic"), now, up))
+    emit("idx.active_enter", mono_to_epoch(props.get("ActiveEnterTimestampMonotonic"), now, up))
+    emit("idx.state_change", mono_to_epoch(props.get("StateChangeTimestampMonotonic"), now, up))
+    rc, out = run([JOURNALCTL, "-b", "-u", "wazuh-indexer", "-o", "cat", "--no-pager", "-n", "5000"])
+    if rc == 0:
+        emit("idx.boot_timeouts", out.count("start operation timed out"))
+        emit("idx.boot_sched_restarts", out.count("Scheduled restart job"))
+        emit("idx.boot_start_limit", out.count("Start request repeated too quickly"))
+    else:
+        err("idx", "JOURNAL_UNREADABLE")
+    emit("idx.http", http_code("https://127.0.0.1:9200/"))
+    if os.path.exists(INDEXER_CERT) and os.path.exists(INDEXER_KEY):
+        rc, out = run([CURL, "-sk", "-m", "8", "--cert", INDEXER_CERT, "--key", INDEXER_KEY,
+                       "https://127.0.0.1:9200/_cluster/health?filter_path=status"])
+        m = re.search(r'"status"\s*:\s*"(green|yellow|red)"', out)
+        emit("idx.health", m.group(1) if m else "unknown")
+    else:
+        emit("idx.health", "unknown")
+        err("idx", "NO_CLIENT_CERT")
+    try:
+        last = None
+        for line in tail(CLUSTER_LOG).splitlines():
+            m = HEALTH_LINE.match(line)
+            if m:
+                last = m
+        if last:
+            at = datetime.strptime(last.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+            emit("idx.health_change_at", int(at.timestamp()))
+            emit("idx.health_change_to", last.group(3).lower())
+    except OSError:
+        err("idx", "CLUSTER_LOG_UNREADABLE")
+
+
+# --- D: dashboard ----------------------------------------------------------------------------
+def dashboard():
+    rc, out = run([SYSTEMCTL, "is-active", "wazuh-dashboard"])
+    emit("dash.unit", out.strip() or "unknown")
+    emit("dash.http", http_code("https://127.0.0.1/"))
+
+
+# --- F: Filebeat -----------------------------------------------------------------------------
+def filebeat(now):
+    rc, out = run([SYSTEMCTL, "is-active", "filebeat"])
+    emit("fb.unit", out.strip() or "unknown")
+    try:
+        cutoff = datetime.fromtimestamp(now - FILEBEAT_WINDOW_S, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        n = sum(1 for line in tail(FILEBEAT_LOG).splitlines()
+                if line[:19] >= cutoff and "Failed to connect to backoff(elasticsearch" in line)
+        emit("fb.connect_failures_15m", n)
+    except OSError:
+        err("fb", "LOG_UNREADABLE")
+    try:
+        emit("fb.registry_mtime", int(os.stat(FILEBEAT_REGISTRY).st_mtime))
+        st = os.stat(ALERTS)
+        offset = None
+        for line in tail(FILEBEAT_REGISTRY).splitlines():
+            if '"inode":' not in line:
+                continue
+            try:
+                v = json.loads(line).get("v") or {}
+            except ValueError:
+                continue
+            fs = v.get("FileStateOS") or {}
+            if fs.get("inode") == st.st_ino and isinstance(v.get("offset"), int):
+                offset = v["offset"]
+        emit("fb.lag_bytes", st.st_size - offset if offset is not None else -1)
+    except OSError:
+        err("fb", "REGISTRY_UNREADABLE")
+
+
+# --- A: agents -------------------------------------------------------------------------------
+def agents():
+    rc, out = run([AGENT_CONTROL, "-l"], timeout=30)
+    ids = []
+    for line in out.splitlines():
+        m = AGENT_LINE.search(line)
+        if not m or len(ids) >= MAX_AGENTS:
+            continue
+        aid, name, status = m.group(1), m.group(2), m.group(3)
+        name = re.sub(r"\s*\(server\)$", "", name).strip()
+        status = re.sub(r"[^A-Za-z/]+", "_", status).strip("_")
+        emit(f"agent.{aid}.name", name)
+        emit(f"agent.{aid}.status", status)
+        ids.append(aid)
+    emit("agents.listed", len(ids))
+    if not ids:
+        err("agents", "NO_AGENT_LIST")
+    return ids
+
+
+# --- T: auth telemetry -----------------------------------------------------------------------
+def scan(fh, any_seen, canary_seen):
+    for raw in fh:
+        if RULE_5715 not in raw:
+            continue
+        try:
+            d = json.loads(raw)
+        except ValueError:
+            continue
+        if str((d.get("rule") or {}).get("id")) != "5715":
+            continue
+        log = d.get("full_log") or ""
+        if ACCEPTED not in log or "pam_unix(cron:session)" in log:
+            continue
+        aid = str((d.get("agent") or {}).get("id") or "")
+        ts = epoch_of(d.get("timestamp") or "")
+        if not aid or not ts:
+            continue
+        any_seen[aid] = max(any_seen.get(aid, 0), ts)
+        if CANARY in log:
+            canary_seen[aid] = max(canary_seen.get(aid, 0), ts)
+
+
+def auth(ids, now):
+    any_seen, canary_seen = {}, {}
+    status = "ok"
+    try:
+        if os.path.getsize(ALERTS) > MAX_SCAN_BYTES:
+            status = "partial"
+        else:
+            with open(ALERTS, "rb") as fh:
+                scan(fh, any_seen, canary_seen)
+    except OSError:
+        status = "failed"
+    # Today's file starts at 00:00 UTC, so a 24 h window needs yesterday's archive too.
+    y = datetime.fromtimestamp(now, timezone.utc) - timedelta(days=1)
+    path = os.path.join(ALERTS_DIR, y.strftime("%Y"), y.strftime("%b"), f"ossec-alerts-{y:%d}.json.gz")
+    if status != "failed" and any(a not in any_seen for a in ids):
+        try:
+            if os.path.getsize(path) > MAX_SCAN_BYTES // 4:
+                status = "partial"
+            else:
+                with gzip.open(path, "rb") as fh:
+                    scan(fh, any_seen, canary_seen)
+        except OSError:
+            status = "partial"
+    emit("auth.scan", status)
+    for aid in ids:
+        emit(f"auth.{aid}.any", any_seen.get(aid, 0))
+        emit(f"auth.{aid}.canary", canary_seen.get(aid, 0))
+
+
+def main(argv):
+    if len(argv) > 1:
+        print("err.args=REFUSED\nend=1")
+        return 2
+    now = time.time()
+    up = uptime_s()
+    emit("schema", SCHEMA)
+    emit("now", int(now))
+    for area, fn in (("mgr", lambda: manager(now)), ("x", drops), ("idx", lambda: indexer(now, up)),
+                     ("dash", dashboard), ("fb", lambda: filebeat(now))):
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 - one area failing must not hide the others
+            err(area, "PROBE_FAILED")
+    try:
+        ids = agents()
+    except Exception:  # noqa: BLE001
+        err("agents", "PROBE_FAILED")
+        ids = []
+    try:
+        auth(ids, now)
+    except Exception:  # noqa: BLE001
+        emit("auth.scan", "failed")
+    emit("end", 1)
+    print("\n".join(OUT))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
