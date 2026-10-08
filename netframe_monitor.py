@@ -384,13 +384,153 @@ def filter_benign_journal(out):
     return "\n".join(_split_journal(out)[0])
 
 
-def parse_journal(out):
-    actionable, benign = _split_journal(out)
-    low = "\n".join(actionable).lower()
-    return {"error_lines": len(actionable),
-            "benign_filtered": len(benign),
-            "auth_failures": low.count("authentication failure") + low.count("failed password"),
-            "service_failures": low.count("failed to start")}
+# ---------------------------------------------------------------------------
+# journal_errors verdict. Until 2026-10-08 classify() returned "OK" for this check unconditionally,
+# so the counts above were narrated by the interpreter but never moved a verdict. That hid pve4
+# logging ~242 err lines per 20 minutes, all one message ("sshd-session[N]: error: no more
+# sessions", 8,600 to 17,100 a day since 2026-09-11, caused by client ControlMaster fan-out).
+#
+# The verdict is now computed from the same parse as the metrics, so the two cannot disagree:
+#   UNKNOWN  the window was not measured: journalctl exited non-zero, the output is empty or not
+#            journalctl's short format, or the entries are not inside the 20-minute window
+#            (stale or clock-skewed evidence). Never green.
+#   CRIT     a storm: many actionable lines no named signature explains, or a very high total.
+#   WARN     a named known signature repeating, any one normalized message repeating, or an
+#            elevated count of actionable lines.
+#   OK       measured, inside the window, below every threshold.
+# Collection failures the generic path already names (TIMEOUT, AUTH-FAIL, UNREACHABLE) keep those
+# verdicts: they are more specific than UNKNOWN and they fail the run's exit status.
+#
+# Thresholds are per 20-minute window, sized on 14 days of measured err journals (2026-09-24 to
+# 2026-10-08, BENIGN_JOURNAL_RE applied) on jarvis, randy, quarkylab, pve2, pve3 and pve5. In 1,008
+# windows per host the worst actionable count was 70 (jarvis), 42 (pve5), 21 (quarkylab), 19
+# (pve2), 3 (randy) and 2 (pve3); the worst single repeated message was 28. Windows that would WARN:
+# jarvis 5, pve5 1, quarkylab 1, all others 0 (each a real event: sshd/pam_systemd session failures,
+# a corosync quorum loss, guest-agent timeouts). None would have reached CRIT.
+JOURNAL_WINDOW_S = 20 * 60        # must match --since in JOURNAL
+JOURNAL_WARN_LINES = 20           # actionable lines in the window
+JOURNAL_REPEAT_WARN = 10          # one normalized message (or one known signature) this often
+JOURNAL_STORM_LINES = 120         # actionable lines that no known signature explains (6/min)
+JOURNAL_STORM_CEILING = 1200      # any actionable lines at all, known or not (60/min)
+JOURNAL_CLOCK_SLACK_S = 300       # collection time plus modest clock skew
+
+# Recurring messages with an identified cause. Naming one makes it WARN with its own reason when it
+# repeats; it never makes it OK and it is never added to BENIGN_JOURNAL_RE. Names are exported as
+# the `reason` label, so they must fit check_reason()'s [A-Z0-9_]{,32} contract.
+KNOWN_JOURNAL_SIGNATURES = (
+    # pve4 from 2026-09-11: MaxSessions exhausted by the wall dashboards' ControlMaster fan-out.
+    ("SSHD_NO_MORE_SESSIONS",
+     re.compile(r"\bsshd(?:-session)?(?:\[\d+\])?: error: no more sessions\b", re.I)),
+)
+
+_JOURNAL_MONTHS = {m: i for i, m in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+# journalctl's default short format: "Oct 08 12:34:56 host ident[pid]: message".
+_JOURNAL_ENTRY_RE = re.compile(r"^([A-Z][a-z]{2}) ([0-9]{2}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) \S+ (.*)$")
+# "-- No entries --" and the "-- Boot <id> --" separators are journalctl's own, not log entries.
+_JOURNAL_MARKER_RE = re.compile(r"^-- .* --$")
+# ssh's own notices on a first connection or a weak key exchange, merged in from stderr.
+_SSH_NOTICE_RE = re.compile(r"^(?:Warning: Permanently added |\*\* )")
+
+
+def normalize_journal_message(msg):
+    """Collapse a journal message to its signature: PIDs, hex, IPs, ports and numbers removed, so
+    "sshd-session[123]: error: no more sessions" and its 241 siblings count as one message."""
+    msg = re.sub(r"\[\d+\]", "", msg)
+    msg = re.sub(r"0x[0-9a-fA-F]+", "N", msg)
+    msg = re.sub(r"\b[0-9a-fA-F]{8,}\b", "N", msg)
+    msg = re.sub(r"\d+", "N", msg)
+    return re.sub(r"\s+", " ", msg).strip()
+
+
+def _journal_epoch(groups, now):
+    """Local-time epoch of a short-format timestamp. The format has no year: take now's year, and the
+    previous one when that would put the entry more than a day in the future (New Year)."""
+    mon = _JOURNAL_MONTHS.get(groups[0])
+    if mon is None:
+        return None
+    year = time.localtime(now).tm_year
+    for y in (year, year - 1):
+        try:
+            t = time.mktime((y, mon, int(groups[1]), int(groups[2]), int(groups[3]),
+                             int(groups[4]), 0, 0, -1))
+        except (OverflowError, ValueError):
+            return None
+        if t <= now + 86400:
+            return t
+    return None
+
+
+def parse_journal(out, rc=0, now=None):
+    """Counts, signatures, and the verdict for one journal_errors run. Pure: `now` is injectable."""
+    now = time.time() if now is None else now
+    entries, benign, malformed, notices = [], 0, 0, 0
+    oldest = newest = None
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        m = _JOURNAL_ENTRY_RE.match(line)
+        if m:
+            t = _journal_epoch(m.groups(), now)
+            if t is None:
+                malformed += 1
+                continue
+            oldest = t if oldest is None else min(oldest, t)
+            newest = t if newest is None else max(newest, t)
+            if BENIGN_JOURNAL_RE.search(line):
+                benign += 1
+            else:
+                entries.append(m.group(6))
+        elif _JOURNAL_MARKER_RE.match(line.strip()):
+            continue
+        elif line[:1].isspace() and (entries or benign):
+            continue                      # continuation of a multi-line message
+        elif _SSH_NOTICE_RE.match(line):
+            notices += 1
+        else:
+            malformed += 1
+    low = "\n".join(entries).lower()
+    known = {}
+    unexplained = []
+    for msg in entries:
+        for name, rx in KNOWN_JOURNAL_SIGNATURES:
+            if rx.search(msg):
+                known[name] = known.get(name, 0) + 1
+                break
+        else:
+            unexplained.append(normalize_journal_message(msg))
+    top_repeat = max((unexplained.count(s) for s in set(unexplained)), default=0)
+    stale = (oldest is not None and oldest < now - JOURNAL_WINDOW_S - JOURNAL_CLOCK_SLACK_S) or \
+            (newest is not None and newest > now + JOURNAL_CLOCK_SLACK_S)
+    d = {"error_lines": len(entries), "benign_filtered": benign,
+         "auth_failures": low.count("authentication failure") + low.count("failed password"),
+         "service_failures": low.count("failed to start"),
+         "unexplained_lines": len(unexplained), "top_repeat": top_repeat,
+         "known_signatures": known, "malformed_lines": malformed, "ssh_notices": notices,
+         "window_s": JOURNAL_WINDOW_S, "measured": True, "stale": bool(stale)}
+    if rc != 0 or not out.strip() or malformed:
+        # Not a measurement. Counts are withheld so no consumer can sum them as "0 errors".
+        for k in ("error_lines", "benign_filtered", "auth_failures", "service_failures",
+                  "unexplained_lines", "top_repeat"):
+            d[k] = None
+        d["known_signatures"], d["measured"], d["stale"] = {}, False, None
+        # Empty output with rc 0 is malformed too: journalctl always prints "-- No entries --".
+        d["state"], d["reason"] = "UNKNOWN", ("UNMEASURED" if rc != 0 else "MALFORMED")
+        return d
+    top_known = max(known.items(), key=lambda kv: kv[1], default=(None, 0))
+    if stale:
+        d["state"], d["reason"] = "UNKNOWN", REASON_STALE
+    elif len(entries) >= JOURNAL_STORM_CEILING or len(unexplained) >= JOURNAL_STORM_LINES:
+        d["state"], d["reason"] = "CRIT", "STORM"
+    elif top_known[1] >= JOURNAL_REPEAT_WARN:
+        d["state"], d["reason"] = "WARN", top_known[0]
+    elif top_repeat >= JOURNAL_REPEAT_WARN:
+        d["state"], d["reason"] = "WARN", "REPEATED"
+    elif len(entries) >= JOURNAL_WARN_LINES:
+        d["state"], d["reason"] = "WARN", "ELEVATED"
+    else:
+        d["state"], d["reason"] = "OK", ""
+    return d
 
 
 def parse_pbs(out):
@@ -743,10 +883,10 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "ups": parse_ups}
 
 
-def classify(name, rc, out):
+def classify(name, rc, out, now=None):
     """Coarse health verdict; auth detection keys off the command's OWN output
     (sudo's "sudo:" stderr / ssh publickey errors), never on substrings that can
-    appear inside journal/SMART log text."""
+    appear inside journal/SMART log text. `now` is used only by journal_errors' window check."""
     low = out.lower()
     if rc == 124:
         return "TIMEOUT"
@@ -897,7 +1037,7 @@ def classify(name, rc, out):
     if name == "zpool":
         return "OK" if "all pools are healthy" in low else "WARN"
     if name == "journal_errors":
-        return "OK"
+        return parse_journal(out, rc=rc, now=now)["state"]
     return "OK" if rc == 0 else "WARN"
 
 
@@ -927,6 +1067,8 @@ def check_reason(name, metrics):
         raw = "DRIFT" if metrics.get("any_drift") else ""
     elif name == "backup_verify":
         raw = "FAILED_CHECKS" if metrics.get("failed") else ""
+    elif name == "journal_errors":
+        raw = metrics.get("reason") or ""
     clean = re.sub(r"[^A-Za-z0-9_]", "", str(raw)).upper()[:_REASON_MAX]
     return clean
 
@@ -1110,12 +1252,16 @@ def main():
         node_result = {}
         for name, command in cfg["checks"].items():
             rc, out = run(ip, command)
-            verdict = classify(name, rc, out)
+            now = time.time()
+            verdict = classify(name, rc, out, now=now)
             collection_failed = collection_failed or verdict in COLLECTION_FAILURES
             if _worse(verdict, worst):
                 worst = verdict
             try:
-                metrics = PARSERS[name](out) if name in PARSERS else {}
+                if name == "journal_errors":
+                    metrics = parse_journal(out, rc=rc, now=now)  # same inputs as the verdict
+                else:
+                    metrics = PARSERS[name](out) if name in PARSERS else {}
             except Exception as exc:  # noqa: BLE001
                 metrics = {"parse_error": str(exc)}
             # Strip cosmetic kernel chatter from the journal excerpt the
