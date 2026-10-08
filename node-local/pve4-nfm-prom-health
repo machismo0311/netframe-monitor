@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# nfm-prom-health - Prometheus liveness wrapper for netframe-monitor (C-3).
+#
+# INSTALL TARGET: pve4:/usr/local/sbin/nfm-prom-health
+# CONSUMER:       C3 netframe-monitor AI-ops `prometheus` check, invoked as
+#                 `sudo -n /usr/local/sbin/nfm-prom-health`
+# CONTRACT:       no arguments, no stdin; prints Prometheus /-/healthy body, exit 0 when healthy.
+#
+# WHY THIS FILE EXISTS AT ALL. The original P3.7 plan repointed only nfm-prom and would have left
+# this one aimed at CT103. netframe-monitor would then have reported Prometheus DOWN and raised a
+# false alert while Prometheus was in fact healthy on obs-core - a monitoring system lying about
+# the thing it monitors. DR-2026-07-27 F2 caught it. The cutover is a MINIMUM of two changes and
+# this is the second; C-1 without C-2 is a partial migration, not a cutover.
+#
+# NOTE ON A SEPARATE PRE-EXISTING DEFECT. OPS-2026-07-30-01 records that this wrapper does not
+# exist on Jarvis, which is why netframe-monitor's prometheus check reports WARN rc=28. That is a
+# different host and a different defect; installing this file on pve4 does not fix it and must not
+# be reported as having done so.
+set -u
+
+NFM_PROM_HOST="${NFM_PROM_HOST:-jarvis}"
+NFM_PROM_CTID="${NFM_PROM_CTID:-210}"
+NFM_PROM_TIMEOUT="${NFM_PROM_TIMEOUT:-10}"
+NFM_PROM_HEALTH_URL="${NFM_PROM_HEALTH_URL:-http://127.0.0.1:9090/-/healthy}"
+
+# This probe is ONE session, but it lands on the same sshd MaxSessions budget as the dashboards'
+# fan-out, so it takes a slot from the same semaphore nfm-prom uses. Without that it becomes the
+# eleventh session during a refresh, gets "Session open refused by peer", and netframe-monitor
+# reports Prometheus DOWN while Prometheus is healthy - the precise false alert DR-2026-07-27 F2
+# exists to prevent. See bin/nfm-prom for the measurement.
+NFM_PROM_MAXPAR="${NFM_PROM_MAXPAR:-8}"
+NFM_PROM_SEMDIR="${NFM_PROM_SEMDIR:-/run/nfm-prom}"
+# Shorter than nfm-prom's: a liveness probe that blocks for 20s is itself a liveness problem, and
+# netframe-monitor retries on its own 15-minute cycle.
+NFM_PROM_SEMWAIT="${NFM_PROM_SEMWAIT:-8}"
+
+# --fail so an HTTP 5xx becomes a non-zero exit rather than a 200-looking success with an error
+# body. A liveness probe that returns 0 for "Prometheus said 503" is worse than no probe.
+probe() {
+	ssh -o BatchMode=yes "$NFM_PROM_HOST" \
+		pct exec "$NFM_PROM_CTID" -- \
+		curl -sS --fail --max-time "$NFM_PROM_TIMEOUT" "$NFM_PROM_HEALTH_URL"
+}
+
+mkdir -p "$NFM_PROM_SEMDIR" 2>/dev/null || {
+	echo "nfm-prom-health: cannot create $NFM_PROM_SEMDIR - probing WITHOUT the session bound" >&2
+	probe
+	exit $?
+}
+
+deadline=$(($(date +%s) + NFM_PROM_SEMWAIT))
+while :; do
+	slot=1
+	while [ "$slot" -le "$NFM_PROM_MAXPAR" ]; do
+		if exec {fd}<>"$NFM_PROM_SEMDIR/slot.$slot" 2>/dev/null; then
+			if flock -n "$fd"; then
+				probe
+				rc=$?
+				exec {fd}>&-
+				exit $rc
+			fi
+			exec {fd}>&-
+		fi
+		slot=$((slot + 1))
+	done
+	if [ "$(date +%s)" -ge "$deadline" ]; then
+		echo "nfm-prom-health: no session slot within ${NFM_PROM_SEMWAIT}s" >&2
+		exit 75
+	fi
+	sleep 0.05
+done
