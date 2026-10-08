@@ -882,9 +882,13 @@ def test_unreachable_variants():
 def test_unreachable_not_spoofed_by_journal_text():
     # connect-error text INSIDE journal output (rc 0, timestamped lines) must not
     # flip the verdict - only ssh's own line-start "ssh:" counts.
+    import time
+    now = time.mktime((2026, 7, 16, 7, 0, 0, 0, 0, -1))
     out = "Jul 16 06:55:03 pve4 kernel: eth0: No route to host during probe"
-    assert mon.classify("journal_errors", 0, out) == "OK"
-    assert mon.classify("journal_errors", 255, out) == "OK"  # rc255 but not ssh's line
+    assert mon.classify("journal_errors", 0, out, now=now) == "OK"
+    # rc255 but not ssh's own line: not UNREACHABLE. A non-zero exit is still not a measurement,
+    # so it reads UNKNOWN rather than green.
+    assert mon.classify("journal_errors", 255, out, now=now) == "UNKNOWN"
 
 
 def test_unreachable_does_not_mask_authfail():
