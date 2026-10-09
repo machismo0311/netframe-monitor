@@ -1,0 +1,58 @@
+nfm-smart v1
+policy=direct targets=2
+== /dev/sda dev=/dev/sda kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-7.0.14-19-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART overall-health self-assessment test result: PASSED
+
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x000b   100   100   016    Pre-fail  Always       -       0
+  2 Throughput_Performance  0x0005   136   136   054    Pre-fail  Offline      -       94
+  3 Spin_Up_Time            0x0007   124   124   024    Pre-fail  Always       -       308 (Average 302)
+  4 Start_Stop_Count        0x0012   100   100   000    Old_age   Always       -       47
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+  8 Seek_Time_Performance   0x0005   140   140   020    Pre-fail  Offline      -       30
+  9 Power_On_Hours          0x0012   087   087   000    Old_age   Always       -       91934
+ 10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       47
+192 Power-Off_Retract_Count 0x0032   100   100   000    Old_age   Always       -       122
+193 Load_Cycle_Count        0x0012   100   100   000    Old_age   Always       -       122
+194 Temperature_Celsius     0x0002   171   171   000    Old_age   Always       -       35 (Min/Max 16/44)
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       0
+-- rc=0
+== /dev/nvme0n1 dev=/dev/nvme0n1 kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-7.0.14-19-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF SMART DATA SECTION ===
+SMART overall-health self-assessment test result: PASSED
+
+SMART/Health Information (NVMe Log 0x02, NSID 0xffffffff)
+Critical Warning:                   0x00
+Temperature:                        23 Celsius
+Available Spare:                    100%
+Available Spare Threshold:          50%
+Percentage Used:                    22%
+Data Units Read:                    130,142,614 [66.6 TB]
+Data Units Written:                 62,600,966 [32.0 TB]
+Host Read Commands:                 1,682,008,765
+Host Write Commands:                1,506,160,833
+Controller Busy Time:               10,823
+Power Cycles:                       1,345
+Power On Hours:                     7,698
+Unsafe Shutdowns:                   7
+Media and Data Integrity Errors:    0
+Error Information Log Entries:      0
+Warning  Comp. Temperature Time:    0
+Critical Comp. Temperature Time:    0
+Temperature Sensor 1:               23 Celsius
+-- rc=0
+end=1

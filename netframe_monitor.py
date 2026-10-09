@@ -74,11 +74,16 @@ JOURNAL = "sudo -n /usr/bin/journalctl -p err -b --since '-20min' --no-pager"
 # cadence (netframe-monitor.timer OnUnitActiveSec) so a one-off ages out within one cycle.
 # Sudoers on every node matches this EXACT argv (see /etc/sudoers.d/monitor) - changing it
 # here requires updating all seven sudoers files in the same change.
-# -H (health verdict) + -A (attributes) so we can trend pending/realloc/temp.
-SMART = (
-    "for d in $(lsblk -dno NAME,TYPE | awk '$2==\"disk\"{print $1}'); do "
-    "echo \"== /dev/$d ==\"; sudo -n /usr/sbin/smartctl -H -A /dev/$d 2>&1; done"
-)
+# SMART is collected by an argument-free, root-owned wrapper (node-local/nfm-smart, the same file on
+# every node, per-node policy in /etc/netframe/nfm-smart.conf) pinned in sudoers with "" = no args.
+# It replaced `for d in $(lsblk ...); smartctl -H -A /dev/$d` (and a bare `/usr/sbin/smartctl` grant
+# that allowed any argument, self-tests and setting changes included). The loop picked targets by
+# block-device name with no -d, so behind a MegaRAID controller it polled the wrong path: on
+# QuarkyLab SMART RETURN STATUS failed with DID_BAD_TARGET and smartctl's attribute-check fallback
+# read as OK; on Randy a virtual drive with no SMART read OK while its member disks went unpolled.
+# The wrapper derives targets from the controller topology and polls each physical disk once; the
+# verdict stays here, in classify_smart(). Measured 2026-10-09, see node-local/README.md.
+SMART = "sudo -n /usr/local/sbin/nfm-smart"
 ZPOOL = "sudo -n /usr/sbin/zpool status -x; echo '---'; sudo -n /usr/sbin/zpool list"
 PBS = "sudo -n /usr/sbin/proxmox-backup-manager datastore list"
 # Backup-verify report emitted by the Ansible backup-verify playbook (daily cron
@@ -311,20 +316,75 @@ def parse_zpool(out):
     return {"status_healthy": healthy, "pools": pools}
 
 
+# Per-device SMART states. Only PASSED is healthy and only FAILED is a failure; everything between
+# is UNKNOWN, because "we could not read the drive's own verdict" is not evidence of health.
+SMART_PASSED, SMART_FAILED, SMART_NO_SMART = "PASSED", "FAILED", "NO_SMART"
+SMART_STATUS_CMD_FAILED = "STATUS_CMD_FAILED"      # status command errored, attribute fallback
+SMART_STATUS_UNSUPPORTED = "STATUS_UNSUPPORTED"    # controller cannot return it, attribute fallback
+SMART_COLLECT_FAILED = "COLLECTION_FAILED"         # smartctl could not open/identify the device
+SMART_NO_VERDICT = "NO_VERDICT"                    # output carried no health line at all
+# Reason precedence for the check-level `reason` label (bounded, [A-Z0-9_]{,32}).
+_SMART_REASON_ORDER = ("SELF_ASSESSMENT_FAILED", SMART_COLLECT_FAILED, "TRUNCATED", "NO_DEVICES",
+                       SMART_STATUS_CMD_FAILED, SMART_STATUS_UNSUPPORTED, SMART_NO_VERDICT)
+_SMART_HDR = re.compile(r"^== (\S+)(.*?) ==\s*$")
+
+
+def _smart_device_state(text, kind, rc):
+    low = text.lower()
+    m = re.search(r"smart health status:\s*(.+)", low)
+    if ("self-assessment test result: failed" in low or "failing_now" in low
+            or (m and m.group(1).strip() != "ok")
+            or (isinstance(rc, int) and rc & 24)):   # smartctl bit 3 DISK FAILING, bit 4 prefail <= thresh
+        return SMART_FAILED
+    if kind in ("virtual", "no-smart") or "lacks smart capability" in low \
+            or "smart support is: unavailable" in low:
+        return SMART_NO_SMART
+    if (rc == "TIMEOUT" or (isinstance(rc, int) and rc & 3) or "smartctl open device" in low
+            or "please specify device type" in low or "mandatory smart command failed" in low
+            or "unknown usb bridge" in low):
+        return SMART_COLLECT_FAILED
+    if "smart status not supported" in low:
+        return SMART_STATUS_UNSUPPORTED
+    if ("based on an attribute check" in low or "smart status command failed" in low
+            or (isinstance(rc, int) and rc & 4)):   # bit 2: a SMART command failed
+        return SMART_STATUS_CMD_FAILED
+    if "self-assessment test result: passed" in low or (m and m.group(1).strip() == "ok"):
+        return SMART_PASSED
+    return SMART_NO_VERDICT
+
+
 def parse_smart(out):
-    devices, failed = 0, []
+    """Per-device SMART state from nfm-smart output (or the legacy lsblk loop, which has no
+    `kind=`, no `-- rc=` and no `end=1`: legacy output can never be complete, so never OK)."""
+    devices, failed, states, no_smart = 0, [], {}, []
     worst_pending = worst_realloc = 0
     max_temp = None
-    dev = None
+    wrapper = complete = False
+    errors = []
+    blocks, cur = [], None
     for line in out.splitlines():
-        if line.startswith("== /dev/"):
-            dev = line.strip().strip("= ").strip()
-            devices += 1
+        if line.startswith("nfm-smart v"):
+            wrapper = True
             continue
+        if line.strip() == "end=1":
+            complete = True
+            continue
+        if re.match(r"^err=[A-Z_]{1,32}$", line.strip()):
+            errors.append(line.strip()[4:])
+            continue
+        h = _SMART_HDR.match(line)
+        if h and line.startswith("== /dev/"):
+            kv = dict(re.findall(r"(\w+)=(\S+)", h.group(2)))
+            cur = {"dev": h.group(1), "kind": kv.get("kind", "legacy"), "rc": None, "lines": []}
+            blocks.append(cur)
+            continue
+        r = re.match(r"^-- rc=(\d+|TIMEOUT)\s*$", line)
+        if r and cur is not None:
+            cur["rc"] = int(r.group(1)) if r.group(1).isdigit() else r.group(1)
+            continue
+        if cur is not None:
+            cur["lines"].append(line)
         low = line.lower()
-        if "self-assessment test result: failed" in low or "smart health status: fail" in low or "failing_now" in low:
-            if dev:
-                failed.append(dev)
         m = re.search(r"reallocated_sector_ct\s+.*\s(\d+)$", low)
         if m:
             worst_realloc = max(worst_realloc, int(m.group(1)))
@@ -335,9 +395,54 @@ def parse_smart(out):
         if m:
             t = int(m.group(1))
             max_temp = t if max_temp is None else max(max_temp, t)
+    for b in blocks:
+        devices += 1
+        st = _smart_device_state("\n".join(b["lines"]), b["kind"], b["rc"])
+        if wrapper and b["kind"] not in ("virtual", "no-smart") and b["rc"] is None \
+                and st != SMART_FAILED:
+            st = SMART_COLLECT_FAILED   # the wrapper always closes a polled block with -- rc=
+        states[b["dev"]] = st
+        if st == SMART_FAILED:
+            failed.append(b["dev"])
+        elif st == SMART_NO_SMART:
+            no_smart.append(b["dev"])
+    # A FAILED verdict anywhere in the text counts even without a device header (fail-safe).
+    low = out.lower()
+    if not blocks and ("self-assessment test result: failed" in low or "failing_now" in low):
+        failed.append("?")
+    present = set(states.values())
+    if failed:
+        reason = "SELF_ASSESSMENT_FAILED"
+    elif errors or SMART_COLLECT_FAILED in present:
+        reason = SMART_COLLECT_FAILED
+    elif wrapper and not complete:
+        reason = "TRUNCATED"
+    elif not blocks:
+        reason = "NO_DEVICES"
+    elif not wrapper:
+        reason = SMART_STATUS_CMD_FAILED if SMART_STATUS_CMD_FAILED in present else (
+            SMART_STATUS_UNSUPPORTED if SMART_STATUS_UNSUPPORTED in present else (
+                SMART_NO_VERDICT if SMART_NO_VERDICT in present else "LEGACY_COLLECTOR"))
+    else:
+        reason = next((r for r in _SMART_REASON_ORDER if r in present), "")
+    unverified = sorted(d for d, s in states.items()
+                        if s not in (SMART_PASSED, SMART_FAILED, SMART_NO_SMART))
     return {"devices": devices, "failed": sorted(set(failed)),
             "worst_pending_sectors": worst_pending, "worst_reallocated": worst_realloc,
-            "max_temp_c": max_temp}
+            "max_temp_c": max_temp, "states": states, "no_smart": sorted(no_smart),
+            "unverified": unverified, "wrapper": wrapper, "complete": complete,
+            "errors": errors, "reason": reason}
+
+
+def classify_smart(out):
+    """OK only when the wrapper's output is complete and every polled drive returned its own
+    self-assessment as PASSED. A drive with no SMART (controller virtual drive, declared SD module)
+    is listed in metrics.no_smart and does not fail the check. FAILED is WARN, as before; every
+    unverified case is UNKNOWN with a bounded reason (metrics.reason)."""
+    d = parse_smart(out)
+    if d["failed"]:
+        return "WARN"
+    return "OK" if d["reason"] == "" else "UNKNOWN"
 
 
 # Kernel/journal lines that are cosmetic on this hardware — benign firmware,
@@ -1031,9 +1136,7 @@ def classify(name, rc, out, now=None):
             return "WARN"        # stale => the daily drift-check cron stopped
         return "WARN" if d.get("any_drift") else "OK"
     if name == "smart":
-        if "self-assessment test result: failed" in low or "failing_now" in low or "smart health status: fail" in low:
-            return "WARN"
-        return "OK"
+        return classify_smart(out)
     if name == "zpool":
         return "OK" if "all pools are healthy" in low else "WARN"
     if name == "journal_errors":
@@ -1067,7 +1170,7 @@ def check_reason(name, metrics):
         raw = "DRIFT" if metrics.get("any_drift") else ""
     elif name == "backup_verify":
         raw = "FAILED_CHECKS" if metrics.get("failed") else ""
-    elif name == "journal_errors":
+    elif name in ("journal_errors", "smart"):
         raw = metrics.get("reason") or ""
     clean = re.sub(r"[^A-Za-z0-9_]", "", str(raw)).upper()[:_REASON_MAX]
     return clean

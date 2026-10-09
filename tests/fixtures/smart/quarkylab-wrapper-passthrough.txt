@@ -1,0 +1,219 @@
+nfm-smart v1
+policy=passthrough targets=8
+== /dev/sda dev=/dev/bus/0 type=sat+megaraid,0 kind=megaraid ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Status not supported: ATA return descriptor not supported by controller firmware
+SMART overall-health self-assessment test result: PASSED
+Warning: This result is based on an Attribute check.
+
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x000b   100   100   016    Pre-fail  Always       -       0
+  2 Throughput_Performance  0x0005   133   133   054    Pre-fail  Offline      -       90
+  3 Spin_Up_Time            0x0007   140   140   024    Pre-fail  Always       -       483 (Average 409)
+  4 Start_Stop_Count        0x0012   100   100   000    Old_age   Always       -       209
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+  8 Seek_Time_Performance   0x0005   123   123   020    Pre-fail  Offline      -       31
+  9 Power_On_Hours          0x0012   086   086   000    Old_age   Always       -       99508
+ 10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       51
+192 Power-Off_Retract_Count 0x0032   099   099   000    Old_age   Always       -       1274
+193 Load_Cycle_Count        0x0012   099   099   000    Old_age   Always       -       1274
+194 Temperature_Celsius     0x0002   171   171   000    Old_age   Always       -       35 (Min/Max 16/49)
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       0
+-- rc=0
+== /dev/sdb dev=/dev/bus/0 type=sat+megaraid,1 kind=megaraid ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Status not supported: ATA return descriptor not supported by controller firmware
+SMART overall-health self-assessment test result: PASSED
+Warning: This result is based on an Attribute check.
+
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x000b   100   100   016    Pre-fail  Always       -       0
+  2 Throughput_Performance  0x0005   135   135   054    Pre-fail  Offline      -       84
+  3 Spin_Up_Time            0x0007   134   134   024    Pre-fail  Always       -       498 (Average 431)
+  4 Start_Stop_Count        0x0012   099   099   000    Old_age   Always       -       6828
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+  8 Seek_Time_Performance   0x0005   123   123   020    Pre-fail  Offline      -       31
+  9 Power_On_Hours          0x0012   086   086   000    Old_age   Always       -       99124
+ 10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       65
+192 Power-Off_Retract_Count 0x0032   094   094   000    Old_age   Always       -       7505
+193 Load_Cycle_Count        0x0012   094   094   000    Old_age   Always       -       7505
+194 Temperature_Celsius     0x0002   166   166   000    Old_age   Always       -       36 (Min/Max 10/49)
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       5
+-- rc=0
+== /dev/sdc dev=/dev/sdc kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Current Drive Temperature:     35 C
+Drive Trip Temperature:        85 C
+
+Accumulated power on time, hours:minutes 29979:11
+Manufactured in week 26 of year 2014
+Specified cycle count over device lifetime:  50000
+Accumulated start-stop cycles:  22
+Specified load-unload count over device lifetime:  600000
+Accumulated load-unload cycles:  3723
+Elements in grown defect list: 0
+-- rc=0
+== /dev/sdd dev=/dev/bus/0 type=sat+megaraid,3 kind=megaraid ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Status not supported: ATA return descriptor not supported by controller firmware
+SMART overall-health self-assessment test result: PASSED
+Warning: This result is based on an Attribute check.
+
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x000b   100   100   016    Pre-fail  Always       -       0
+  2 Throughput_Performance  0x0005   133   133   054    Pre-fail  Offline      -       92
+  3 Spin_Up_Time            0x0007   136   136   024    Pre-fail  Always       -       417 (Average 500)
+  4 Start_Stop_Count        0x0012   100   100   000    Old_age   Always       -       256
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+  8 Seek_Time_Performance   0x0005   133   133   020    Pre-fail  Offline      -       27
+  9 Power_On_Hours          0x0012   083   083   000    Old_age   Always       -       119241
+ 10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       88
+192 Power-Off_Retract_Count 0x0032   100   100   000    Old_age   Always       -       979
+193 Load_Cycle_Count        0x0012   100   100   000    Old_age   Always       -       979
+194 Temperature_Celsius     0x0002   166   166   000    Old_age   Always       -       36 (Min/Max 16/49)
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       0
+-- rc=0
+== /dev/sde dev=/dev/bus/0 type=sat+megaraid,4 kind=megaraid ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Status not supported: ATA return descriptor not supported by controller firmware
+SMART overall-health self-assessment test result: PASSED
+Warning: This result is based on an Attribute check.
+
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x000b   100   100   016    Pre-fail  Always       -       0
+  2 Throughput_Performance  0x0005   134   134   054    Pre-fail  Offline      -       88
+  3 Spin_Up_Time            0x0007   126   126   024    Pre-fail  Always       -       493 (Average 495)
+  4 Start_Stop_Count        0x0012   099   099   000    Old_age   Always       -       7802
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+  8 Seek_Time_Performance   0x0005   133   133   020    Pre-fail  Offline      -       27
+  9 Power_On_Hours          0x0012   085   085   000    Old_age   Always       -       111811
+ 10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       63
+192 Power-Off_Retract_Count 0x0032   093   093   000    Old_age   Always       -       8420
+193 Load_Cycle_Count        0x0012   093   093   000    Old_age   Always       -       8420
+194 Temperature_Celsius     0x0002   171   171   000    Old_age   Always       -       35 (Min/Max 11/47)
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       0
+-- rc=0
+== /dev/sdf dev=/dev/bus/0 type=sat+megaraid,5 kind=megaraid ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Status not supported: ATA return descriptor not supported by controller firmware
+SMART overall-health self-assessment test result: PASSED
+Warning: This result is based on an Attribute check.
+
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x000b   100   100   016    Pre-fail  Always       -       0
+  2 Throughput_Performance  0x0005   133   133   054    Pre-fail  Offline      -       91
+  3 Spin_Up_Time            0x0007   140   140   024    Pre-fail  Always       -       417 (Average 475)
+  4 Start_Stop_Count        0x0012   100   100   000    Old_age   Always       -       2775
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+  8 Seek_Time_Performance   0x0005   133   133   020    Pre-fail  Offline      -       27
+  9 Power_On_Hours          0x0012   086   086   000    Old_age   Always       -       102442
+ 10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       83
+192 Power-Off_Retract_Count 0x0032   098   098   000    Old_age   Always       -       3505
+193 Load_Cycle_Count        0x0012   098   098   000    Old_age   Always       -       3505
+194 Temperature_Celsius     0x0002   166   166   000    Old_age   Always       -       36 (Min/Max 18/49)
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       0
+-- rc=0
+== /dev/sdg dev=/dev/bus/0 type=sat+megaraid,6 kind=megaraid ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Status not supported: ATA return descriptor not supported by controller firmware
+SMART overall-health self-assessment test result: PASSED
+Warning: This result is based on an Attribute check.
+
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x000b   100   100   016    Pre-fail  Always       -       0
+  2 Throughput_Performance  0x0005   132   132   054    Pre-fail  Offline      -       94
+  3 Spin_Up_Time            0x0007   142   142   024    Pre-fail  Always       -       515 (Average 363)
+  4 Start_Stop_Count        0x0012   100   100   000    Old_age   Always       -       2775
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000b   100   100   067    Pre-fail  Always       -       0
+  8 Seek_Time_Performance   0x0005   133   133   020    Pre-fail  Offline      -       27
+  9 Power_On_Hours          0x0012   086   086   000    Old_age   Always       -       102569
+ 10 Spin_Retry_Count        0x0013   100   100   060    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       84
+192 Power-Off_Retract_Count 0x0032   098   098   000    Old_age   Always       -       3448
+193 Load_Cycle_Count        0x0012   098   098   000    Old_age   Always       -       3448
+194 Temperature_Celsius     0x0002   171   171   000    Old_age   Always       -       35 (Min/Max 18/48)
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x000a   200   200   000    Old_age   Always       -       0
+-- rc=0
+== /dev/sdh dev=/dev/sdh kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Current Drive Temperature:     34 C
+Drive Trip Temperature:        85 C
+
+Accumulated power on time, hours:minutes 33786:46
+Manufactured in week 08 of year 2014
+Specified cycle count over device lifetime:  50000
+Accumulated start-stop cycles:  31
+Specified load-unload count over device lifetime:  600000
+Accumulated load-unload cycles:  3827
+Elements in grown defect list: 0
+-- rc=0
+end=1

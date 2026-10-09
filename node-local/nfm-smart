@@ -1,0 +1,277 @@
+#!/usr/bin/python3 -I
+"""nfm-smart - controller-correct SMART collection for netframe-monitor.
+
+INSTALL TARGET: <node>:/usr/local/sbin/nfm-smart (root:root 0755), the SAME file on every node.
+PER-NODE POLICY: /etc/netframe/nfm-smart.conf (root:root 0644), optional; see <node>-nfm-smart.conf.
+CONSUMER:       netframe-monitor `smart` check, invoked as `sudo -n /usr/local/sbin/nfm-smart`.
+SUDOERS PIN:    monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-smart ""   (the "" = no arguments)
+CONTRACT:       read-only. Runs only `smartctl --scan`, `smartctl -H -A` and (in --targets mode)
+                `smartctl -i`. Never a self-test, never a setting change.
+
+WHY THIS EXISTS. The collector used to loop over `lsblk` names and run `smartctl -H -A /dev/sdX`
+with no device type. Measured 2026-10-09:
+  * QuarkyLab (PERC on LSI SAS3008, megaraid_sas): the SATA drives answer SMART RETURN STATUS on
+    the plain /dev/sdX path with DID_BAD_TARGET (1546 kernel FAILED lines in 24h). smartctl then
+    prints "SMART Status command failed" and a PASSED "based on an Attribute check" with rc 0, and
+    the old collector read that as OK. The drive self-assessment was never evaluated.
+  * Randy (AVAGO 3108): /dev/sdw is a RAID virtual drive with no SMART at all, yet `smartctl -H`
+    prints "SMART Health Status: OK" for it. Its two member disks were never polled.
+  * Jarvis: /dev/sdh is a Dell IDSDM SD module behind an unknown USB bridge; smartctl needs -d and
+    still has no SMART to give. Disk megaraid,3 sits behind the controller with no /dev/sdX.
+So the target list is derived from the controller topology, not from block-device names:
+
+  megaraid_sas channel >= 2   virtual drive. No smartctl call; reported explicitly as no SMART.
+  megaraid_sas channel 0/1    physical disk. Plain /dev/sdX, unless the node policy says the
+                              plain path is broken for SATA (MEGARAID_SATA_PATH=passthrough), in
+                              which case /dev/bus/H -d sat+megaraid,T.
+  megaraid PD with no sdX     (RAID member, unconfigured disk) /dev/bus/H -d megaraid,N.
+  USB disk                    -d sat, unless its vid:pid is declared in NO_SMART_USB.
+  anything else               plain path, smartctl's own type detection.
+
+Each physical disk is polled exactly once. The verdict is NOT decided here: the monitor judges
+every block, so a fallback ("based on an Attribute check") can never be rendered as OK by this
+file. The final `end=1` line lets the reader detect truncated output; any internal failure is a
+fixed `err=<TOKEN>` line, never free text.
+
+`--targets` (root only; the sudoers pin forbids arguments) prints the same target list as
+`<device>|<type>` lines for the node-exporter smartmon collector, so both consumers share one
+device selection. See node-local/smartmon-canonical/.
+"""
+import os
+import re
+import subprocess
+import sys
+import time
+
+VERSION = "nfm-smart v1"
+SMARTCTL = "/usr/sbin/smartctl"
+CONF = "/etc/netframe/nfm-smart.conf"
+SYS = "/sys"
+CALL_TIMEOUT = 20      # one smartctl call
+DEADLINE = 100         # whole run, inside the monitor's CHECK_TIMEOUT of 120s
+POLICIES = ("direct", "passthrough")
+_USB_ID = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{4}$")
+_DISK = re.compile(r"^(sd[a-z]+|nvme\d+n\d+)$")
+_SCAN = re.compile(r"^/dev/bus/(\d+)\s+-d\s+megaraid,(\d+)\b")
+
+
+class ConfError(Exception):
+    pass
+
+
+def parse_conf(text):
+    """KEY=value lines. Unknown keys or values are an error, never silently ignored."""
+    conf = {"MEGARAID_SATA_PATH": "direct", "NO_SMART_USB": frozenset()}
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            raise ConfError(line)
+        key, val = (s.strip().strip('"') for s in line.split("=", 1))
+        if key == "MEGARAID_SATA_PATH":
+            if val not in POLICIES:
+                raise ConfError(key)
+            conf[key] = val
+        elif key == "NO_SMART_USB":
+            ids = frozenset(val.lower().split())
+            if not all(_USB_ID.match(i) for i in ids):
+                raise ConfError(key)
+            conf[key] = ids
+        else:
+            raise ConfError(key)
+    return conf
+
+
+def plan_targets(disks, megaraid_pds, conf):
+    """Pure target selection.
+
+    disks: [{name, hctl, driver, vendor, usb_id}]; hctl "H:C:T:L" or None, driver is the SCSI
+    host's proc_name, usb_id "vvvv:pppp" or None. megaraid_pds: [(bus, pd_id)] from
+    `smartctl --scan`. Returns [{label, dev, dtype, kind}] where dtype None means smartctl's own
+    detection and kind is one of direct | megaraid | megaraid-hidden | usb | virtual | no-smart.
+    """
+    out, covered = [], set()
+    for d in sorted(disks, key=lambda x: (len(x["name"]), x["name"])):
+        name, label = d["name"], f"/dev/{d['name']}"
+        if d.get("usb_id"):
+            if d["usb_id"] in conf["NO_SMART_USB"]:
+                out.append({"label": label, "dev": None, "dtype": None, "kind": "no-smart"})
+            else:
+                out.append({"label": label, "dev": label, "dtype": "sat", "kind": "usb"})
+            continue
+        if d.get("driver") == "megaraid_sas" and d.get("hctl"):
+            host, chan, tgt, _ = (int(x) for x in d["hctl"].split(":"))
+            if chan >= 2:
+                out.append({"label": label, "dev": None, "dtype": None, "kind": "virtual"})
+                continue
+            covered.add((host, tgt))
+            if d.get("vendor") == "ATA" and conf["MEGARAID_SATA_PATH"] == "passthrough":
+                out.append({"label": label, "dev": f"/dev/bus/{host}",
+                            "dtype": f"sat+megaraid,{tgt}", "kind": "megaraid"})
+                continue
+        if name.startswith("sd") or name.startswith("nvme"):
+            out.append({"label": label, "dev": label, "dtype": None, "kind": "direct"})
+    for bus, pd in sorted(set(megaraid_pds)):
+        if (bus, pd) not in covered:
+            out.append({"label": f"/dev/bus/{bus}:megaraid,{pd}", "dev": f"/dev/bus/{bus}",
+                        "dtype": f"megaraid,{pd}", "kind": "megaraid-hidden"})
+    return out
+
+
+def parse_scan(text):
+    pds = []
+    for line in (text or "").splitlines():
+        m = _SCAN.match(line.strip())
+        if m:
+            pds.append((int(m.group(1)), int(m.group(2))))
+    return pds
+
+
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _usb_id(real):
+    """Walk up a block device's sysfs path to the USB device that owns it."""
+    p = real
+    while p and p != "/":
+        vid, pid = _read(os.path.join(p, "idVendor")), _read(os.path.join(p, "idProduct"))
+        if vid and pid:
+            return f"{vid.lower()}:{pid.lower()}"
+        p = os.path.dirname(p)
+    return "unknown"
+
+
+def probe_disks(sys_root=SYS):
+    disks = []
+    for name in sorted(os.listdir(os.path.join(sys_root, "block"))):
+        if not _DISK.match(name):
+            continue
+        blk = os.path.join(sys_root, "block", name)
+        real = os.path.realpath(blk)
+        d = {"name": name, "hctl": None, "driver": None, "vendor": None, "usb_id": None}
+        if "/usb" in real:
+            d["usb_id"] = _usb_id(real)
+        if name.startswith("sd"):
+            hctl = os.path.basename(os.path.realpath(os.path.join(blk, "device")))
+            if re.match(r"^\d+:\d+:\d+:\d+$", hctl):
+                d["hctl"] = hctl
+                d["driver"] = _read(os.path.join(sys_root, "class", "scsi_host",
+                                                 f"host{hctl.split(':')[0]}", "proc_name"))
+            d["vendor"] = _read(os.path.join(blk, "device", "vendor"))
+        disks.append(d)
+    return disks
+
+
+def smartctl(args):
+    p = subprocess.run([SMARTCTL, *args], capture_output=True, text=True, timeout=CALL_TIMEOUT,
+                       env={"LC_ALL": "C", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"})
+    return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def smartmon_type(t):
+    """Type string for the smartmon collector, which selects its attribute parser by it."""
+    if t["dtype"] and t["kind"] != "megaraid-hidden":
+        return t["dtype"]
+    if t["kind"] == "megaraid-hidden":
+        _, info = smartctl(["-i", "-d", t["dtype"], t["dev"]])
+        return ("sat+" + t["dtype"]) if "ATA Version" in info or "Device Model:" in info \
+            else t["dtype"]
+    name = os.path.basename(t["dev"])
+    if name.startswith("nvme"):
+        return "nvme"
+    return "sat" if _read(os.path.join(SYS, "block", name, "device", "vendor")) == "ATA" else "scsi"
+
+
+class Fatal(Exception):
+    pass
+
+
+def discover():
+    """(targets, conf), or Fatal(<TOKEN>)."""
+    try:
+        conf = parse_conf(_read(CONF) or "")
+    except ConfError:
+        raise Fatal("CONF_INVALID") from None
+    try:
+        disks = probe_disks()
+    except OSError:
+        raise Fatal("DISCOVERY_FAILED") from None
+    pds = []
+    if any(d.get("driver") == "megaraid_sas" for d in disks):
+        try:
+            _, scan = smartctl(["--scan"])
+        except (OSError, subprocess.TimeoutExpired):
+            raise Fatal("SCAN_FAILED") from None
+        pds = parse_scan(scan)
+        if not pds:
+            raise Fatal("SCAN_EMPTY")   # a megaraid host with no PDs listed is not believable
+    return plan_targets(disks, pds, conf), conf
+
+
+def collect():
+    print(VERSION)
+    try:
+        targets, conf = discover()
+    except Fatal as e:
+        print(f"err={e}")
+        return 3
+    print(f"policy={conf['MEGARAID_SATA_PATH']} targets={len(targets)}")
+    start = time.monotonic()
+    for t in targets:
+        if time.monotonic() - start > DEADLINE:
+            print("err=DEADLINE")
+            return 3
+        sel = ""
+        if t["dev"]:
+            sel = f" dev={t['dev']}" + (f" type={t['dtype']}" if t["dtype"] else "")
+        print(f"== {t['label']}{sel} kind={t['kind']} ==")
+        if t["kind"] == "virtual":
+            print("nfm: no SMART (controller virtual drive; members are polled as megaraid PDs)")
+            continue
+        if t["kind"] == "no-smart":
+            print("nfm: no SMART (declared in NO_SMART_USB)")
+            continue
+        args = ["-H", "-A"] + (["-d", t["dtype"]] if t["dtype"] else []) + [t["dev"]]
+        try:
+            rc, text = smartctl(args)
+        except subprocess.TimeoutExpired:
+            print("-- rc=TIMEOUT")
+            continue
+        except OSError:
+            print("err=SMARTCTL_MISSING")
+            return 3
+        print(text.rstrip())
+        print(f"-- rc={rc}")
+    print("end=1")
+    return 0
+
+
+def list_targets():
+    try:
+        targets, _ = discover()
+    except Fatal as e:
+        print(f"err={e}", file=sys.stderr)
+        return 3
+    for t in targets:
+        if t["kind"] not in ("virtual", "no-smart"):
+            print(f"{t['dev']}|{smartmon_type(t)}")
+    return 0
+
+
+def main():
+    if not sys.argv[1:]:
+        return collect()
+    if sys.argv[1:] == ["--targets"]:
+        return list_targets()
+    print("err=USAGE")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

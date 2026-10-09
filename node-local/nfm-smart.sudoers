@@ -1,0 +1,6 @@
+# NetFRAME: sudoers pin for the SMART wrapper. SOURCE ONLY, not installed.
+# Target: every node that runs the `smart` check, /etc/sudoers.d/monitor-smart, root:root 0440.
+# Validate with `visudo -cf` before installing. The "" permits NO arguments.
+# In the SAME change, remove the bare `/usr/sbin/smartctl` entry from /etc/sudoers.d/monitor: a pin
+# without arguments lets the monitor user pass ANY argument, self-tests and setting changes included.
+monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-smart ""

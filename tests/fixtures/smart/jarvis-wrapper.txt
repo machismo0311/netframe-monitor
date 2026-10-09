@@ -1,0 +1,198 @@
+nfm-smart v1
+policy=direct targets=9
+== /dev/sda dev=/dev/sda kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Percentage used endurance indicator: 5%
+Current Drive Temperature:     29 C
+Drive Trip Temperature:        60 C
+
+Accumulated power on time, hours:minutes 32125:57
+Manufactured in week 33 of year 2015
+Specified cycle count over device lifetime:  10000
+Accumulated start-stop cycles:  156
+Elements in grown defect list: 0
+-- rc=0
+== /dev/sdb dev=/dev/sdb kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Percentage used endurance indicator: 3%
+Current Drive Temperature:     29 C
+Drive Trip Temperature:        60 C
+
+Accumulated power on time, hours:minutes 19582:27
+Manufactured in week 33 of year 2015
+Specified cycle count over device lifetime:  10000
+Accumulated start-stop cycles:  131
+Elements in grown defect list: 0
+-- rc=0
+== /dev/sdc dev=/dev/sdc kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Grown defects during certification <not available>
+Total blocks reassigned during format <not available>
+Total new blocks reassigned = 0
+Power on minutes since format <not available>
+Current Drive Temperature:     32 C
+Drive Trip Temperature:        60 C
+
+Accumulated power on time, hours:minutes 54401:01
+Manufactured in week 03 of year 2018
+Specified cycle count over device lifetime:  10000
+Accumulated start-stop cycles:  31
+Specified load-unload count over device lifetime:  300000
+Accumulated load-unload cycles:  2295
+Elements in grown defect list: 0
+-- rc=0
+== /dev/sdd dev=/dev/sdd kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Grown defects during certification <not available>
+Total blocks reassigned during format <not available>
+Total new blocks reassigned = 0
+Power on minutes since format <not available>
+Current Drive Temperature:     32 C
+Drive Trip Temperature:        60 C
+
+Accumulated power on time, hours:minutes 54395:39
+Manufactured in week 03 of year 2018
+Specified cycle count over device lifetime:  10000
+Accumulated start-stop cycles:  30
+Specified load-unload count over device lifetime:  300000
+Accumulated load-unload cycles:  2293
+Elements in grown defect list: 0
+-- rc=0
+== /dev/sde dev=/dev/sde kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Grown defects during certification <not available>
+Total blocks reassigned during format <not available>
+Total new blocks reassigned = 0
+Power on minutes since format <not available>
+Current Drive Temperature:     32 C
+Drive Trip Temperature:        60 C
+
+Accumulated power on time, hours:minutes 54395:30
+Manufactured in week 52 of year 2017
+Specified cycle count over device lifetime:  10000
+Accumulated start-stop cycles:  31
+Specified load-unload count over device lifetime:  300000
+Accumulated load-unload cycles:  2297
+Elements in grown defect list: 0
+-- rc=0
+== /dev/sdf dev=/dev/sdf kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART overall-health self-assessment test result: PASSED
+
+SMART Attributes Data Structure revision number: 10
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x010f   083   064   ---    Pre-fail  Always       -       201907976
+  3 Spin_Up_Time            0x0103   092   092   ---    Pre-fail  Always       -       0
+  4 Start_Stop_Count        0x0032   100   100   ---    Old_age   Always       -       36
+  5 Reallocated_Sector_Ct   0x0133   100   100   ---    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000f   092   060   ---    Pre-fail  Always       -       1459465926
+  9 Power_On_Hours          0x0032   038   038   ---    Old_age   Always       -       54395
+ 10 Spin_Retry_Count        0x0013   100   100   ---    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   ---    Old_age   Always       -       34
+184 End-to-End_Error        0x0032   100   100   ---    Old_age   Always       -       0
+187 Reported_Uncorrect      0x0032   100   100   ---    Old_age   Always       -       0
+188 Command_Timeout         0x0032   100   099   ---    Old_age   Always       -       2
+189 High_Fly_Writes         0x003a   100   100   ---    Old_age   Always       -       0
+190 Airflow_Temperature_Cel 0x0022   069   057   ---    Old_age   Always       -       31 (Min/Max 27/37)
+191 G-Sense_Error_Rate      0x0032   100   100   ---    Old_age   Always       -       1436
+192 Power-Off_Retract_Count 0x0032   096   096   ---    Old_age   Always       -       8483
+193 Load_Cycle_Count        0x0032   091   091   ---    Old_age   Always       -       18070
+194 Temperature_Celsius     0x0022   031   043   ---    Old_age   Always       -       31 (0 19 0 0 0)
+195 Hardware_ECC_Recovered  0x001a   001   001   ---    Old_age   Always       -       201907976
+196 Reallocated_Event_Count 0x0032   100   100   ---    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0012   100   100   ---    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0010   100   100   ---    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x003e   200   200   ---    Old_age   Always       -       0
+240 Head_Flying_Hours       0x0000   100   253   ---    Old_age   Offline      -       47324 (135 246 0)
+241 Total_LBAs_Written      0x0000   100   253   ---    Old_age   Offline      -       127956778299
+242 Total_LBAs_Read         0x0000   100   253   ---    Old_age   Offline      -       1229023514877
+-- rc=0
+== /dev/sdg dev=/dev/sdg kind=direct ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Health Status: OK
+
+Format status indicates no format since manufacture
+Current Drive Temperature:     32 C
+Drive Trip Temperature:        60 C
+
+Accumulated power on time, hours:minutes 54395:36
+Manufactured in week 52 of year 2017
+Specified cycle count over device lifetime:  10000
+Accumulated start-stop cycles:  31
+Specified load-unload count over device lifetime:  300000
+Accumulated load-unload cycles:  2294
+Elements in grown defect list: 0
+-- rc=0
+== /dev/sdh kind=no-smart ==
+nfm: no SMART (declared in NO_SMART_USB)
+== /dev/bus/0:megaraid,3 dev=/dev/bus/0 type=megaraid,3 kind=megaraid-hidden ==
+smartctl 7.5 2025-04-30 r5714 [x86_64-linux-6.14.11-9-pve] (local build)
+Copyright (C) 2002-25, Bruce Allen, Christian Franke, www.smartmontools.org
+
+=== START OF READ SMART DATA SECTION ===
+SMART Status not supported: ATA return descriptor not supported by controller firmware
+SMART overall-health self-assessment test result: PASSED
+Warning: This result is based on an Attribute check.
+
+SMART Attributes Data Structure revision number: 10
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x010f   074   065   044    Pre-fail  Always       -       26644399
+  3 Spin_Up_Time            0x0103   095   095   000    Pre-fail  Always       -       0
+  4 Start_Stop_Count        0x0032   100   100   020    Old_age   Always       -       43
+  5 Reallocated_Sector_Ct   0x0133   100   100   010    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x000f   077   060   030    Pre-fail  Always       -       49917782
+  9 Power_On_Hours          0x0032   015   015   000    Old_age   Always       -       75094
+ 10 Spin_Retry_Count        0x0013   100   100   097    Pre-fail  Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   020    Old_age   Always       -       43
+184 End-to-End_Error        0x0032   100   100   099    Old_age   Always       -       0
+187 Reported_Uncorrect      0x0032   100   100   000    Old_age   Always       -       0
+188 Command_Timeout         0x0032   100   100   000    Old_age   Always       -       0
+189 High_Fly_Writes         0x003a   100   100   000    Old_age   Always       -       0
+190 Airflow_Temperature_Cel 0x0022   070   064   040    Old_age   Always       -       30 (Min/Max 27/36)
+191 G-Sense_Error_Rate      0x0032   100   100   000    Old_age   Always       -       12
+192 Power-Off_Retract_Count 0x0032   092   092   000    Old_age   Always       -       17489
+193 Load_Cycle_Count        0x0032   087   087   000    Old_age   Always       -       26352
+194 Temperature_Celsius     0x0022   030   040   000    Old_age   Always       -       30 (0 19 0 0 0)
+195 Hardware_ECC_Recovered  0x001a   001   001   000    Old_age   Always       -       26644399
+196 Reallocated_Event_Count 0x0032   100   100   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0012   100   100   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0010   100   100   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x003e   200   200   000    Old_age   Always       -       0
+240 Head_Flying_Hours       0x0000   100   253   000    Old_age   Offline      -       924 (38 194 0)
+241 Total_LBAs_Written      0x0000   100   253   000    Old_age   Offline      -       3353629
+242 Total_LBAs_Read         0x0000   100   253   000    Old_age   Offline      -       23290770
+-- rc=0
+end=1
