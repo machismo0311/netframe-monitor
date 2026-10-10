@@ -1,0 +1,26 @@
+# NetFRAME guest_state: the guests each Proxmox node is EXPECTED to host.
+#
+# This list is the authority for which guests should exist, not whatever the node happens to report:
+# a guest that is missing has to be noticed, and a guest nobody expected has to be noticed too.
+# Never generate it from a live listing. Change it by review when the estate changes.
+#
+# IDENTITY IS THE VMID. `name` is what the guest is expected to be called; a guest with the same VMID
+# and a different name is reported as a rename (visible drift), never as one guest missing plus an
+# unknown extra. `type` is lxc or qemu.
+#
+# Whether an expected guest SHOULD be running is not decided here. It is read from PVE's own `onboot`
+# flag on the node at collection time (measured), so a guest kept deliberately stopped with onboot=0
+# is never alerted.
+#
+# SCOPE: pve5 only. pve3, pve4 and quarkylab still use the older name-keyed `guests` check and have no
+# rows here; they are NOT migrated yet. The estate held 17 guests in total when this file was created
+# (2026-10-10); that count is context only and is not used by anything.
+#
+# Loaded by netframe_guest_state.load_inventory(): header first, `#` comments and blank lines ignored,
+# every row must have exactly the header's fields, vmid a positive integer, type lxc|qemu, name
+# non-empty, and (node, vmid) unique. A malformed file raises, and the check then reads UNKNOWN.
+node|vmid|type|name|notes
+pve5|105|lxc|headscale|tailnet coordination server
+pve5|108|lxc|netframe-pihole2|secondary Pi-hole
+pve5|110|qemu|homeassistant|Home Assistant OS VM
+pve5|112|lxc|minecraft|
