@@ -735,7 +735,7 @@ def test_inventory_matches_source_for_this_repo():
         if mod in ("netframe_policy", "netframe_audit", "netframe_knowledge",
                    "netframe_monitor", "netframe_admission", "netframe_confdrift",
                    "netframe_memory", "netframe_eval", "netframe_backup",
-                   "netframe_evidence", "netframe_wazuh_health"):
+                   "netframe_evidence", "netframe_wazuh_health", "netframe_guest_state"):
             continue  # engine/collector/plumbing: no LLM prose to an operator
         assert mod in inv, f"{mod} is missing from the AI surface inventory"
         row = inv[mod]

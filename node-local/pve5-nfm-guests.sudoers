@@ -1,0 +1,6 @@
+# NetFRAME guest_state: sudoers pin for the generic guest-state wrapper. SOURCE ONLY, not installed.
+# Target: pve5, /etc/sudoers.d/monitor-guests, root:root 0440.
+# Validate with `visudo -cf` before installing. The "" permits NO arguments.
+# The wrapper is node-local/pve-nfm-guests, installed as /usr/local/sbin/nfm-guests (root:root 0755).
+# The existing `qm list` / `pct list` pins (jarvis-oncall) are unrelated and stay as they are.
+monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-guests ""
