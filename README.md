@@ -86,6 +86,16 @@ UNKNOWN is never green. The expected agents are a tracked list (`wazuh-expected-
 whoever happens to be connected; and freshness is judged on authentication-success events only,
 because an agent can be connected while its journal reader is blind.
 
+**Guest state is measured by ID, and is never application health.** A newer `guest_state` check
+(one hypervisor so far; the others keep the older list-based check until migrated) reads guest state
+from the hypervisor's API through an argument-free wrapper (`node-local/pve-nfm-guests`), so a paused
+VM reads PAUSED rather than running, and judges it against a tracked inventory keyed by guest ID
+(`node-local/pve-expected-guests.psv`). An expected guest that should start on boot but is stopped,
+paused or missing is WARN; a failed, stale or suspiciously empty collection is UNKNOWN, never "all
+missing"; unexpected and renamed guests stay visible. A running guest is infrastructure context only:
+it never says the application inside is healthy, and the service probes remain the authority. Contract
+and deploy order: `node-local/README.md`. Status: source ready, not deployed.
+
 ## Least privilege
 
 The `monitor` account is granted `NOPASSWD` sudo **only for exact commands**, never for blanket
@@ -109,6 +119,8 @@ root, so each grant is pinned to the daemon's exact invocation rather than to th
 scp *.py wazuh-expected-agents.psv netframe-run.sh netframe-8808-lock.sh netframe-console-lock.sh \
     <monitor-host>:/opt/netframe-monitor/
 scp systemd/*.service systemd/*.timer systemd/*.path <monitor-host>:/etc/systemd/system/
+ssh <monitor-host> 'mkdir -p /opt/netframe-monitor/node-local'
+scp node-local/pve-expected-guests.psv <monitor-host>:/opt/netframe-monitor/node-local/
 ssh <monitor-host> 'chmod +x /opt/netframe-monitor/*.sh && systemctl daemon-reload \
     && systemctl enable --now netframe-monitor.timer netframe-report-web.service \
        netframe-8808-lock.service netframe-console.service netframe-console-reload.path'
@@ -126,6 +138,11 @@ ssh <monitor-host> 'chmod +x /opt/netframe-monitor/*.sh && systemctl daemon-relo
 > before this collector, too: an older wall paints its SIEM integrity chip from the `wazuh` check
 > alone, which now carries only the services tree, so it would still show green while auth telemetry
 > is stale. The current wall reads the old daemon-only check as UNKNOWN, so wall-first is safe.
+
+> **Guest-state ordering.** Install the guest-state wrapper and its sudoers pin on the hypervisor
+> (`node-local/`) and copy the inventory *before* deploying a collector that calls it. In the other
+> order that check reads AUTH-FAIL or UNKNOWN, never green. The wall does not read `guest_state`, so
+> it is unaffected in either order.
 
 ## Not included (generated / secret)
 

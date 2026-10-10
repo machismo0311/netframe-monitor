@@ -33,6 +33,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import netframe_wazuh_health as WH  # noqa: E402
+import netframe_guest_state as GS  # noqa: E402
 
 BASE = "/opt/netframe-monitor"
 KEY = f"{BASE}/monitor_key"
@@ -114,6 +115,16 @@ GPU = (
 # grafana/homepage/etc.), qm on QuarkyLab (wazuh VM).
 PCT_LIST = "sudo -n /usr/sbin/pct list"
 QM_LIST = "sudo -n /usr/sbin/qm list"
+# Guest state by VMID, read from PVE's API (pvesh) by the generic argument-free wrapper
+# node-local/pve-nfm-guests, installed as /usr/local/sbin/nfm-guests. Unlike `guests` above it can
+# see a PAUSED VM (qmpstatus), carries collected_at, reads onboot from PVE's own config, and is judged
+# against a tracked inventory keyed by VMID; netframe_guest_state classifies it. A NEW check name on
+# purpose: the live wall merges checks["guests"]["metrics"]["guests"] and paints a running guest
+# green, so data under `guest_state` can never turn an application tile green. Guest RUNNING is
+# infrastructure context only, never application health. pve5 only for now; the other nodes keep
+# `guests` until they are migrated. The inventory keeps its node-local/ path when deployed.
+GUEST_STATE = "sudo -n /usr/local/sbin/nfm-guests"
+GUEST_INVENTORY = os.path.join(_HERE, "node-local", "pve-expected-guests.psv")
 # Monitoring-service health, probed from Jarvis over the network. Grafana's
 # /api/health is unauthenticated and reports its DB status. Grafana fronts
 # Prometheus/Loki, which stay localhost-bound (pentest F-03) and so are only
@@ -247,7 +258,8 @@ NODES = {
     # alerting no longer shares a node with NPM/Vaultwarden); npm_dns stays with NPM on pve3.
     "pve3":      {"ip": "192.168.10.201", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "npm_dns": NPM_DNS}},
     "pve4":      {"ip": "192.168.10.202", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guests": PCT_LIST, "prometheus": PROMETHEUS}},
-    "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART}},
+    # guest_state, never `guests`: see GUEST_STATE for why pve5 must not emit the legacy check.
+    "pve5":      {"ip": "192.168.10.203", "checks": {"df": DF, "journal_errors": JOURNAL, "smart": SMART, "guest_state": GUEST_STATE}},
     # Wazuh SIEM VM (.184): seven-input health via the argument-free wrapper (scoped sudo), which
     # also yields the derived wazuh_coverage check, plus unprivileged df.
     "wazuh":     {"ip": "192.168.10.184", "checks": {"wazuh": WAZUH_HEALTH, "df": DF}},
@@ -757,6 +769,27 @@ def parse_guests(out):
             "guests": guests, "down_monitoring": down_monitoring}
 
 
+_GUEST_CACHE = {}
+
+
+def guest_inventory():
+    """The tracked guest inventory, or None when it cannot be read (guest_state then reads UNKNOWN)."""
+    if "inventory" not in _GUEST_CACHE:
+        try:
+            _GUEST_CACHE["inventory"] = GS.load_inventory(GUEST_INVENTORY)
+        except (OSError, ValueError, KeyError):
+            _GUEST_CACHE["inventory"] = None
+    return _GUEST_CACHE["inventory"]
+
+
+def parse_guest_state(out, rc=0, now=None, host=None):
+    """guest_state metrics (with verdict and reason) for one wrapper run on `host`. Pure apart from
+    the cached inventory read; `now` is injectable. Without `host` the node cannot be confirmed, so
+    the collection reads COLLECTION_FAILED (WRONG_NODE), never OK."""
+    now = time.time() if now is None else now
+    return GS.evaluate(out, rc=rc, host=host, now=now, inventory=guest_inventory())
+
+
 def parse_grafana(out):
     db = re.search(r'"database"\s*:\s*"([^"]+)"', out)
     ver = re.search(r'"version"\s*:\s*"([^"]+)"', out)
@@ -988,10 +1021,11 @@ PARSERS = {"df": parse_df, "gpu": parse_gpu, "zpool": parse_zpool,
            "ups": parse_ups}
 
 
-def classify(name, rc, out, now=None):
+def classify(name, rc, out, now=None, host=None):
     """Coarse health verdict; auth detection keys off the command's OWN output
     (sudo's "sudo:" stderr / ssh publickey errors), never on substrings that can
-    appear inside journal/SMART log text. `now` is used only by journal_errors' window check."""
+    appear inside journal/SMART log text. `now` is used only by journal_errors' window check and
+    guest_state's freshness check; `host` only by guest_state, to confirm which node answered."""
     low = out.lower()
     if rc == 124:
         return "TIMEOUT"
@@ -1021,6 +1055,8 @@ def classify(name, rc, out, now=None):
             if gname.lower() in MONITORING_GUESTS and status != "running":
                 return "WARN"  # a monitoring guest is down
         return "OK"
+    if name == "guest_state":
+        return parse_guest_state(out, rc=rc, now=now, host=host)["verdict"]
     if name == "grafana":
         if rc != 0:
             return "WARN"  # endpoint unreachable / HTTP error
@@ -1170,7 +1206,7 @@ def check_reason(name, metrics):
         raw = "DRIFT" if metrics.get("any_drift") else ""
     elif name == "backup_verify":
         raw = "FAILED_CHECKS" if metrics.get("failed") else ""
-    elif name in ("journal_errors", "smart"):
+    elif name in ("journal_errors", "smart", "guest_state"):
         raw = metrics.get("reason") or ""
     clean = re.sub(r"[^A-Za-z0-9_]", "", str(raw)).upper()[:_REASON_MAX]
     return clean
@@ -1261,6 +1297,8 @@ def flatten_metrics(nodes):
             if name == "guests":
                 flat[f"{host}.guests.running"] = m.get("running")
                 flat[f"{host}.guests.stopped"] = m.get("stopped")
+            if name == "guest_state":
+                flat.update(GS.flat(m, f"{host}.guest_state"))
             if name == "ups":
                 flat[f"{host}.ups.reporting"] = m.get("reporting")
                 if m.get("min_charge") is not None:
@@ -1356,13 +1394,15 @@ def main():
         for name, command in cfg["checks"].items():
             rc, out = run(ip, command)
             now = time.time()
-            verdict = classify(name, rc, out, now=now)
+            verdict = classify(name, rc, out, now=now, host=host)
             collection_failed = collection_failed or verdict in COLLECTION_FAILURES
             if _worse(verdict, worst):
                 worst = verdict
             try:
                 if name == "journal_errors":
                     metrics = parse_journal(out, rc=rc, now=now)  # same inputs as the verdict
+                elif name == "guest_state":
+                    metrics = parse_guest_state(out, rc=rc, now=now, host=host)
                 else:
                     metrics = PARSERS[name](out) if name in PARSERS else {}
             except Exception as exc:  # noqa: BLE001

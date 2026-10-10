@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""NetFRAME monitor: read-only guest state of the LOCAL Proxmox VE node, as one JSON document.
+
+Generic: nothing in here names a node or a guest. It runs on any PVE node and reports that node's
+own LXCs and VMs. Accepts NO arguments. Starts nothing, stops nothing, writes nothing, changes no
+configuration.
+
+WHY THIS EXISTS. The older `guests` check parses `pct list` / `qm list` column text, keyed by guest
+NAME. `qm list` cannot show a paused VM (it prints `running`), the text has no timestamp, and a
+failed command reads as a WARN rather than as "not measured". This wrapper reads PVE's own API
+through `pvesh` instead, which carries `qmpstatus` (paused, suspended, prelaunch, ...) for VMs and
+`status` and `lock` for both kinds, and stamps when it was collected.
+
+OUTPUT (one JSON document on stdout, always, even on failure):
+
+    {"schema": "netframe-guest-state/v1", "node": <short hostname>, "collected_at": <epoch int>,
+     "ok": true|false, "error": <fixed token or null>,
+     "guests": [{"vmid": int, "type": "lxc"|"qemu", "name": str, "status": str,
+                 "qmpstatus": str|null, "lock": str|null, "onboot": 0|1|null}]}
+
+`onboot` is read from the guest's own config in the PVE cluster filesystem
+(/etc/pve/nodes/<node>/lxc/<vmid>.conf or qemu-server/<vmid>.conf), main section only (snapshot
+sections start at the first `[name]` line and are ignored). An absent `onboot:` line is PVE's
+default, 0. An unreadable config is null: not measured, never guessed.
+
+FAILURE. Any pvesh failure, timeout, non-JSON or malformed answer gives ok=false, a fixed error
+token (never captured stderr or free text), guests=[] and a nonzero exit. A half-collected list is
+never emitted: an LXC list without the VM list would read as "the VMs are gone".
+
+SAFETY. Every external call is a fixed argv list with its own timeout; no shell is ever invoked and
+no guest name or other returned value is ever placed in a command or a path. A config path is built
+from the integer VMID only.
+
+Deploy (NOT done by this commit): /usr/local/sbin/nfm-guests, root:root 0755, plus the per-node
+sudoers pin (for pve5: pve5-nfm-guests.sudoers). See node-local/README.md.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+SCHEMA = "netframe-guest-state/v1"
+#: Fixed search path for pvesh. Not inherited from the caller.
+SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+PVE_ROOT = "/etc/pve"
+#: Per pvesh call. Two calls, so the whole run stays far inside the monitor's 120 s CHECK_TIMEOUT.
+TIMEOUT = 20
+MAX_GUESTS = 512
+MAX_STR = 128
+
+
+def short_hostname():
+    return socket.gethostname().split(".")[0]
+
+
+def pvesh(path, *extra):
+    """Parsed JSON of `pvesh get <path> --output-format json`, or raise RuntimeError(token)."""
+    env = {"PATH": SAFE_PATH, "LC_ALL": "C"}
+    argv = ["pvesh", "get", path, "--output-format", "json", *extra]
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT, env=env,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("PVESH_TIMEOUT") from None
+    except OSError:
+        raise RuntimeError("PVESH_UNAVAILABLE") from None
+    if p.returncode != 0:
+        raise RuntimeError("PVESH_FAILED")
+    try:
+        data = json.loads(p.stdout)
+    except ValueError:
+        raise RuntimeError("PVESH_NOT_JSON") from None
+    if not isinstance(data, list):
+        raise RuntimeError("PVESH_MALFORMED")
+    return data
+
+
+def _opt_str(v):
+    """A bounded string, or None. Anything that is not a plain string is not reported."""
+    if isinstance(v, str) and v:
+        return v[:MAX_STR]
+    return None
+
+
+def onboot(node, kind, vmid):
+    """PVE's onboot flag for one local guest: 1, 0 (absent line = PVE default) or None (unread)."""
+    sub = "lxc" if kind == "lxc" else "qemu-server"
+    path = os.path.join(PVE_ROOT, "nodes", node, sub, f"{int(vmid)}.conf")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if line.startswith("["):
+                    break                      # snapshot / pending sections are not the live config
+                if line.startswith("onboot:"):
+                    val = line.split(":", 1)[1].strip()
+                    return 1 if val == "1" else 0 if val == "0" else None
+    except OSError:
+        return None
+    return 0
+
+
+def guests_of(node, kind, data):
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise RuntimeError("PVESH_MALFORMED")
+        vmid = item.get("vmid")
+        try:
+            vmid = int(vmid)
+        except (TypeError, ValueError):
+            raise RuntimeError("PVESH_MALFORMED") from None
+        if vmid <= 0 or not isinstance(item.get("status"), str):
+            raise RuntimeError("PVESH_MALFORMED")
+        out.append({"vmid": vmid, "type": kind,
+                    "name": _opt_str(item.get("name")) or "",
+                    "status": item["status"][:MAX_STR],
+                    "qmpstatus": _opt_str(item.get("qmpstatus")) if kind == "qemu" else None,
+                    "lock": _opt_str(item.get("lock")),
+                    "onboot": onboot(node, kind, vmid)})
+    return out
+
+
+def collect(node):
+    lxc = guests_of(node, "lxc", pvesh(f"/nodes/{node}/lxc"))
+    # --full 1 is what makes qmpstatus appear; without it a paused VM reads `running`.
+    qemu = guests_of(node, "qemu", pvesh(f"/nodes/{node}/qemu", "--full", "1"))
+    guests = sorted(lxc + qemu, key=lambda g: g["vmid"])
+    if len(guests) > MAX_GUESTS:
+        raise RuntimeError("TOO_MANY_GUESTS")
+    if len({g["vmid"] for g in guests}) != len(guests):
+        raise RuntimeError("DUPLICATE_VMID")
+    return guests
+
+
+def main(argv):
+    node = short_hostname()
+    doc = {"schema": SCHEMA, "node": node, "collected_at": int(time.time()),
+           "ok": False, "error": None, "guests": []}
+    if len(argv) > 1:
+        doc["error"] = "ARGS_REFUSED"
+        print(json.dumps(doc))
+        return 2
+    try:
+        doc["guests"] = collect(node)
+        doc["ok"] = True
+    except RuntimeError as exc:
+        doc["error"] = str(exc)
+    except Exception:  # noqa: BLE001 - any surprise is a failed collection, never a partial one
+        doc["error"] = "COLLECT_FAILED"
+    if not doc["ok"]:
+        doc["guests"] = []
+    print(json.dumps(doc, sort_keys=True))
+    return 0 if doc["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

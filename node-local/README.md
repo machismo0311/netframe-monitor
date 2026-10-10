@@ -1,7 +1,8 @@
 # Node-local artifacts
 
 Files deployed to specific nodes outside `/opt/netframe-monitor/`, tracked here for
-source-of-truth. Not copied by the top-level deploy block.
+source-of-truth. Not copied by the top-level deploy block, with one exception: the collector reads
+`pve-expected-guests.psv` from `/opt/netframe-monitor/node-local/` (see the guest_state section).
 
 | File | Deploy to | Purpose |
 |---|---|---|
@@ -115,3 +116,100 @@ collector that calls it. In the other order the `smart` check reads AUTH-FAIL, n
 `nfm-smart --targets` (root only) prints the same selection as `<device>|<type>` for the
 node-exporter smartmon collector; see `smartmon-canonical/` for the proposed drop-in that removes
 smartmon's duplicate `/dev/sdX` polling.
+
+## pve-nfm-guests (generic, any Proxmox node) - `guest_state`
+Deployed to `<pve-node>:/usr/local/sbin/nfm-guests` (root:root 0755). **Status: SOURCE READY,
+DEPLOYED NO.** Nothing in this directory has been installed on any node for this check.
+
+Generic, not host-specific: it reports the LOCAL node's own LXCs and VMs and names no node or guest.
+The `pve-` prefix means "any PVE node"; the sudoers pin is per host, so the first one is
+`pve5-nfm-guests.sudoers` (target `/etc/sudoers.d/monitor-guests`, root:root 0440, `visudo -cf`
+first; note the `""` = no arguments permitted):
+
+    monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-guests ""
+
+pve5's existing `qm list` / `pct list` pins are unrelated and stay as they are.
+
+**What it does.** Argument-free, root, read-only, Python 3 stdlib. Two fixed `pvesh get` calls
+(`/nodes/<node>/lxc` and `/nodes/<node>/qemu --full 1`), each with its own 20 s timeout, then
+`onboot` from each guest's own config in `/etc/pve/nodes/<node>/{lxc,qemu-server}/<vmid>.conf`
+(main section only; absent line = PVE default 0; unreadable = null). No shell anywhere; a config path
+is built from the integer VMID only, and guest names are carried as data. It prints exactly one JSON
+document:
+
+    {"schema": "netframe-guest-state/v1", "node": "<short hostname>", "collected_at": <epoch>,
+     "ok": true|false, "error": <fixed token|null>,
+     "guests": [{"vmid": int, "type": "lxc"|"qemu", "name": str, "status": str,
+                 "qmpstatus": str|null, "lock": str|null, "onboot": 0|1|null}]}
+
+Any pvesh failure, timeout, non-JSON or malformed answer gives `ok=false`, a fixed error token
+(`PVESH_FAILED`, `PVESH_TIMEOUT`, `PVESH_NOT_JSON`, `PVESH_MALFORMED`, `PVESH_UNAVAILABLE`, ...),
+`guests=[]` and a nonzero exit. stderr never leaves the host.
+
+**Why pvesh and not `qm list`.** `qm list` prints `running` for a paused VM. Only the API's
+`qmpstatus` (with `--full 1`) can say `paused`, `suspended` or `prelaunch`.
+
+**Expected inventory.** `pve-expected-guests.psv` (this directory), keyed by VMID:
+`node|vmid|type|name|notes`, rows for pve5 only (105 headscale, 108 netframe-pihole2, 110
+homeassistant, 112 minecraft). pve3, pve4 and quarkylab are NOT migrated and keep the older
+name-keyed `guests` check. It is the one file in this directory the collector reads: deploy it to
+`/opt/netframe-monitor/node-local/pve-expected-guests.psv` (same relative path as in the repo). If it
+is absent or malformed the check reads UNKNOWN (`INVENTORY_UNREADABLE`), never OK.
+
+### guest_state contract (classified by `netframe_guest_state.py`)
+
+| Level | State | Meaning |
+|---|---|---|
+| guest | RUNNING | lxc `running`; qemu `running` with qmpstatus `running` |
+| guest | STOPPED | status `stopped` |
+| guest | PAUSED | qemu qmpstatus `paused`, `suspended` or `prelaunch` (vCPUs not executing) |
+| guest | MISSING | in the inventory, absent from a SUCCESSFUL collection |
+| guest | UNKNOWN | unrecognised status/qmpstatus (io-error, guest-panicked, inmigrate, ...), qemu with no qmpstatus, or any expected guest when the collection is not trusted |
+| node | OK | well-formed, current document from the right node |
+| node | COLLECTION_FAILED | nonzero exit, `ok=false`, empty, non-JSON, wrong schema, wrong node, malformed entry, duplicate VMID, no timestamp |
+| node | STALE | `collected_at` older than 420 s (the 120 s CHECK_TIMEOUT plus the 300 s clock slack journal_errors already uses), or more than 300 s in the future |
+| node | ZERO_UNEXPECTED | a successful collection with zero guests while the inventory expects some: a collection anomaly, all expected guests UNKNOWN, never "all missing" |
+
+| Verdict | When |
+|---|---|
+| UNKNOWN | collection not OK; inventory unreadable or no rows for the node; otherwise (no measured fault) an expected guest UNKNOWN, or stopped/paused with unreadable onboot |
+| WARN | an expected guest MISSING, or an expected guest with `onboot=1` that is STOPPED or PAUSED |
+| OK | every expected guest measured and none of the above |
+
+Expected-running comes from PVE's own `onboot` flag (measured), never guessed: an expected guest
+with `onboot=0` that is stopped is never alerted. Extra guests and renames (same VMID, new name) are
+always listed (`extra`, `renamed`, `retyped`) and never change the verdict; they are inventory drift
+for review, not an outage. An ssh-level failure keeps the monitor's generic verdicts (TIMEOUT,
+AUTH-FAIL, UNREACHABLE), with collection COLLECTION_FAILED in the metrics.
+
+**RUNNING is infrastructure context only.** It means the hypervisor reports the guest running. It
+never means Headscale, Home Assistant or Minecraft is NOMINAL; the service-health probes remain the
+authority, and nothing here derives a service or application field. Guest state is never inferred
+from application probes, ICMP, TCP or the inventory alone.
+
+**Why a new check name.** The live wall (netframe-dashboard) merges every node's
+`checks["guests"]["metrics"]["guests"]` and paints a running guest green. pve5 therefore emits only
+`guest_state` (a different shape, keyed by VMID) and never `guests`, so its guests cannot turn an
+application tile green. The wall does not read `guest_state` at all.
+
+**Deploy order (NOT done).** (a) install the wrapper and the sudoers pin on pve5 and run
+`sudo -n /usr/local/sbin/nfm-guests` as `monitor` once by hand; (b) copy the inventory as above;
+then (c) deploy the collector. In the other order pve5's `guest_state` reads AUTH-FAIL or UNKNOWN,
+never green, and the wall is unaffected either way because it does not read `guest_state`.
+
+**Alerts: proposed, not implemented.** netframe-monitor has no per-check alert plumbing of its own
+(`netframe_alert.py` handles only whole-node UNREACHABLE). Every check verdict already leaves through
+`netframe_monitor_check_status{node,check,state,reason}` in the textfile export, so these need
+Prometheus rules only, written where the other rules live, not new plumbing:
+
+| Alert | Expression on the existing export | Severity |
+|---|---|---|
+| ExpectedGuestStopped | `check="guest_state",state="warn",reason=~"EXPECTED_GUEST_(STOPPED\|PAUSED)"` | warning |
+| ExpectedGuestMissing | `check="guest_state",state="warn",reason="EXPECTED_GUEST_MISSING"` | warning |
+| GuestStateCollectionFailed | `check="guest_state",state=~"unknown\|auth-fail\|timeout",reason!="STALE"` | warning |
+| GuestStateStale | `check="guest_state",state="unknown",reason="STALE"` | warning |
+
+All warning because WARN and UNKNOWN share rank 1 in the monitor's `VERDICT_RANK` (UNKNOWN is never
+green but is not a measured hard failure), and an UNREACHABLE pve5 is already covered by the
+node-down path. Each should need two consecutive cycles (`for: 30m` at the 15-minute cadence) so a
+single transient read does not page.
