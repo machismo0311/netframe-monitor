@@ -40,7 +40,9 @@ def test_authfail_publickey():
 
 def test_smart_word_failed_in_log_is_not_authfail():
     # the word "failed" inside SMART text must not trip auth/health falsely
-    out = "SMART overall-health self-assessment test result: PASSED\nprev error: read failed"
+    out = ("nfm-smart v1\n== /dev/sda dev=/dev/sda kind=direct ==\n"
+           "SMART overall-health self-assessment test result: PASSED\nprev error: read failed\n"
+           "-- rc=0\nend=1")
     assert mon.classify("smart", 0, out) == "OK"
 
 

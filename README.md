@@ -45,7 +45,7 @@ in one place what this system may and may not do.
 
 | File | Role |
 |---|---|
-| `netframe_monitor.py` | Collector. Runs read-only checks (`df`, `journalctl -p err`, `smartctl -H -A`, `zpool`, backup datastores, `nvidia-smi`, guest liveness, service health endpoints), parses numeric metrics, writes the latest run and appends history. |
+| `netframe_monitor.py` | Collector. Runs read-only checks (`df`, `journalctl -p err`, SMART via a fixed wrapper, `zpool`, backup datastores, `nvidia-smi`, guest liveness, service health endpoints), parses numeric metrics, writes the latest run and appends history. |
 | `netframe_interpret.py` | Interpreter. Diffs the latest run against the previous one plus window trends, calls a **local** LLM bound to loopback, renders the report. Falls back to a deterministic report if the model is down. |
 | `netframe-run.sh` | `ExecStart` wrapper. Runs the collector then the interpreter (the interpreter always runs, even if the collector exits non-zero). |
 | `netframe-8808-lock.sh` | Idempotent host-local firewall lock. Restricts the backend report port to the reverse proxy and localhost only. |
@@ -103,11 +103,11 @@ virtualization verbs that could start, stop, or destroy guests:
 
 | Node role | Granted commands |
 |---|---|
-| Service host | `journalctl`, `smartctl`, scoped guest-list, fixed health wrapper |
-| GPU / compute host | `journalctl`, `smartctl`, `zpool`, scoped guest-list |
-| Storage host | `journalctl`, `smartctl`, `zpool`, backup manager |
+| Service host | `journalctl`, SMART wrapper, scoped guest-list, fixed health wrapper |
+| GPU / compute host | `journalctl`, SMART wrapper, `zpool`, scoped guest-list |
+| Storage host | `journalctl`, SMART wrapper, `zpool`, backup manager |
 | SIEM guest | a single argument-free health wrapper (disk usage runs unprivileged) |
-| Remaining nodes | `journalctl`, `smartctl` |
+| Remaining nodes | `journalctl`, SMART wrapper |
 
 The pinning is deliberate. A bare `journalctl` grant is a pager shell-escape away from interactive
 root, so each grant is pinned to the daemon's exact invocation rather than to the binary.

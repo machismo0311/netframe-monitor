@@ -75,6 +75,48 @@ a deployment decision.
 Emits only a bounded key=value vocabulary and an `end=1` sentinel; any failure is a fixed token.
 Read-only: it starts nothing, stops nothing and changes no configuration.
 
+## nfm-smart (every node with a `smart` check)
+Deployed to `<node>:/usr/local/sbin/nfm-smart` (root:root 0755), the same file on every node,
+with an optional per-node policy at `/etc/netframe/nfm-smart.conf` (root:root 0644; tracked as
+`<node>-nfm-smart.conf`). Sudoers pin, source in `nfm-smart.sudoers` (note the `""` = no
+arguments permitted), replacing the bare `/usr/sbin/smartctl` grant in `/etc/sudoers.d/monitor`:
+
+    monitor ALL=(root) NOPASSWD: /usr/local/sbin/nfm-smart ""
+
+**Why it exists.** The `smart` check looped over `lsblk` names and ran `smartctl -H -A /dev/sdX`
+with no device type. Behind a MegaRAID controller that is the wrong path for some disks. On the GPU
+research node the SATA drives failed SMART RETURN STATUS (DID_BAD_TARGET, about 1500 kernel errors
+a day), smartctl fell back to "PASSED ... based on an Attribute check", and the check read OK. On
+the storage host a RAID virtual drive with no SMART read "SMART Health Status: OK" while its two
+member disks were never polled. The old grant also let the monitor user pass any smartctl argument.
+
+**Target selection** comes from the controller topology, so each physical disk is polled once:
+megaraid_sas channel >= 2 is a virtual drive (explicit, no smartctl call); channel 0/1 is a physical
+disk on its plain path, or on `/dev/bus/H -d sat+megaraid,T` when the node policy says the plain
+path is broken for SATA; a megaraid PD with no block device (RAID member, unconfigured disk) is
+polled as `/dev/bus/H -d megaraid,N`; a USB disk gets `-d sat` unless its vid:pid is declared to
+have no SMART. Canonical list, measured read-only 2026-10-09:
+
+| Node | Targets |
+|---|---|
+| GPU research node | 6 SATA `sat+megaraid,{0,1,3,4,5,6}` via `/dev/bus/0` (policy `passthrough`); 2 SAS plain. The SATA drives cannot return their self-assessment on either path (controller firmware), so they read UNKNOWN / `STATUS_UNSUPPORTED`. |
+| Storage host | 22 JBOD disks on the 3108 plain (SATA there returns a real self-assessment); `sdw` virtual drive explicit no-SMART; its members `megaraid,28` and `megaraid,29` via `/dev/bus/0`; 44 disks on the SAS2308 HBA plain. |
+| LLM node | 7 disks on the 3008 plain; `megaraid,3` (SATA, no block device) via `/dev/bus/0`, reads `STATUS_UNSUPPORTED`; the IDSDM SD module declared no-SMART. |
+| Small nodes | plain SATA + NVMe, unchanged. |
+
+**Verdict** stays in the collector: OK only when output is complete (`end=1`) and every polled disk
+returned PASSED / `SMART Health Status: OK`. FAILED is WARN. An attribute-check fallback, a status
+command failure, an unopenable or unidentified device, a truncated run or an `err=` line is UNKNOWN
+with a bounded reason (`STATUS_UNSUPPORTED`, `STATUS_CMD_FAILED`, `COLLECTION_FAILED`, `TRUNCATED`,
+`NO_DEVICES`, `NO_VERDICT`). A disk with no SMART is listed in `metrics.no_smart`, never FAIL.
+
+**Ordering.** Install the wrapper, the node policy and the pin on every node *before* deploying a
+collector that calls it. In the other order the `smart` check reads AUTH-FAIL, never green.
+
+`nfm-smart --targets` (root only) prints the same selection as `<device>|<type>` for the
+node-exporter smartmon collector; see `smartmon-canonical/` for the proposed drop-in that removes
+smartmon's duplicate `/dev/sdX` polling.
+
 ## pve-nfm-guests (generic, any Proxmox node) - `guest_state`
 Deployed to `<pve-node>:/usr/local/sbin/nfm-guests` (root:root 0755). **Status: SOURCE READY,
 DEPLOYED NO.** Nothing in this directory has been installed on any node for this check.
